@@ -16,7 +16,7 @@ Built from a cross-source synthesis:
 - Public Tesla CAN research: mikegapinski's 40k-signal dictionary, the
   commaai/opendbc Tesla DBC, talas9's per-model wire-format reference,
   tuncasoftbildik's working frame templates, and the original CanFeather
-  reverse engineering. Cited inline below where each frame template comes
+  signal research. Cited inline below where each frame template comes
   from.
 
 This document does not redistribute any binary or descriptor file from a
@@ -90,7 +90,7 @@ Extracted from `SmartActionID` + `ActionID` enums. These are the actions that
 require the Commander dongle to sit on CAN and inject frames. The byte-level
 templates live in the dongle firmware.
 
-### 2a. Actions where the CAN template is public / already reverse engineered
+### 2a. Actions where the CAN template is public / already observed on the bus
 
 These are known from community sources — we can implement them on our own
 MCP2515/TWAI box without any Commander.

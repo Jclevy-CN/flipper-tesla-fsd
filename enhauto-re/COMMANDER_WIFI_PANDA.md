@@ -65,7 +65,7 @@ Failure modes observed by tumik:
 
 That gives us the full set of "secret" Commander CAN frames **without ever
 extracting the firmware**. Firmware is no longer load-bearing for the
-reverse-engineering goal — it'd just be confirmation.
+signal-observation goal — it'd just be confirmation.
 
 ## Other notable repos surfaced in the same sweep
 

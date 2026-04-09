@@ -22,7 +22,7 @@
 - CRC error counter sampled from MCP2515 EFLG register, surfaced on screen
 - TX / RX / Err counters live on the running screen
 - Wiring sanity check: shows a clear "no CAN traffic — check wiring" warning after 5s with zero RX
-- Background-research notes for the enhauto S3XY Commander reverse engineering live in `enhauto-re/RESEARCH.md`
+- Background-research notes on the enhauto S3XY Commander — derived from observing the unencrypted signals on its BLE and CAN interfaces — live in `enhauto-re/`
 
 ## 2.1
 

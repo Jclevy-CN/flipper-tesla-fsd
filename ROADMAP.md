@@ -47,6 +47,10 @@ retransmit. Estimated ~30 LOC each.
 - [ ] `TractionControl` off (`0x2A1 ESP_status`)
 - [ ] `TrackMode` enter/exit (`0x293` + `0x2B9`)
 - [ ] `WiperMode` cycle / `WipersWasher` pulse (`0x3E2`)
+- [ ] **Cybertruck Homelink emulator** — requested by community ([slxslx#2](https://gitlab.com/slxslx/tesla-open-can-mod-slx-repo/-/issues/2#note), @JoshuaSpain). Tesla removed the Homelink module from Cybertruck; the MYQ subscription replacement is widely considered user-hostile. Two viable paths:
+  - **(a) Flipper sub-GHz + CAN trigger.** Flipper Zero already has the sub-GHz hardware for reading/replaying the garage door's rolling code. We'd reuse the existing sub-GHz app for the RF side, then add a CAN trigger on a re-purposable vehicle action (stalk press, steering wheel scroll wheel, etc.) to fire the replay. This is the right fit for our repo — exploits hardware the Flipper already has.
+  - **(b) MQTT / Home Assistant bridge.** CAN trigger → ESP32/Flipper → HA → locally-hosted garage door relay. Less elegant but avoids the RF side entirely and works for people who already have HA.
+  Needs from requester before starting: garage-door brand/frequency (Liftmaster / Chamberlain / Genie / other), and which vehicle input they'd want as the trigger.
 
 ## Tier 3 — needs read-parse-decide (already have BMS pattern to copy)
 
