@@ -305,6 +305,20 @@ void mcp_set_bitrate(FuriHalSpiBusHandle* spi, MCP_BITRATE bitrate, MCP_CLOCK cl
             break;
         }
         break;
+    case MCP_12MHZ:
+        // 12 MHz crystal (Waveshare RS485 CAN HAT)
+        // CNF values for 500 kbps: CFG1=0x00, CFG2=0x90, CFG3=0x82
+        switch(bitrate) {
+        case MCP_125KBPS:
+            cfg1 = 0x03; cfg2 = 0xAC; cfg3 = 0x03; break;
+        case MCP_250KBPS:
+            cfg1 = 0x01; cfg2 = 0x90; cfg3 = 0x82; break;
+        case MCP_500KBPS:
+            cfg1 = 0x00; cfg2 = 0x90; cfg3 = 0x82; break;
+        case MCP_1000KBPS:
+            cfg1 = 0x00; cfg2 = 0x80; cfg3 = 0x80; break;
+        }
+        break;
     case MCP_16MHZ:
         switch(bitrate) {
         case MCP_125KBPS:
