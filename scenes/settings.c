@@ -145,13 +145,14 @@ void tesla_fsd_scene_settings_on_enter(void* context) {
     ADD_TOGGLE("Precondition",     precondition_changed,     precondition)
 
     // ── Beta features (report results in GitHub issues) ──
-    ADD_TOGGLE("[B] Nav FSD Route", nav_enable_changed,       assist_nav_enable)
-    ADD_TOGGLE("[B] TLSSC bit38",   tlssc_bit38_changed,      assist_tlssc_bit38)
-    ADD_TOGGLE("[B] Lane Graph",    lane_graph_changed,        assist_show_lane_graph)
-    ADD_TOGGLE("[B] Tier Override",  tier_override_changed,     gtw_tier_override)
-    ADD_TOGGLE("[B] Dev Mode",       dev_mode_changed,          assist_dev_mode)
-    ADD_TOGGLE("[B] Force LHD",      lhd_override_changed,      assist_lhd_override)
-    ADD_TOGGLE("[B] Hands-Off",      hands_off_changed,         assist_hands_off)
+    variable_item_list_add(list, "-- Beta (report!) --", 0, NULL, NULL);
+    ADD_TOGGLE("Nav FSD Route",  nav_enable_changed,       assist_nav_enable)
+    ADD_TOGGLE("TLSSC bit38",   tlssc_bit38_changed,      assist_tlssc_bit38)
+    ADD_TOGGLE("Lane Graph",    lane_graph_changed,        assist_show_lane_graph)
+    ADD_TOGGLE("Tier Override",  tier_override_changed,     gtw_tier_override)
+    ADD_TOGGLE("Dev Mode",       dev_mode_changed,          assist_dev_mode)
+    ADD_TOGGLE("Force LHD",      lhd_override_changed,      assist_lhd_override)
+    ADD_TOGGLE("Hands-Off",      hands_off_changed,         assist_hands_off)
 
     // ── Hardware ──
     item = variable_item_list_add(list, "MCP Crystal", 3, clock_changed, app);
