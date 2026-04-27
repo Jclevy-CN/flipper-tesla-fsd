@@ -34,7 +34,9 @@ struct FSDState {
     bool           fsd_enabled;     // true when car's UI has FSD selected (mux0)
     bool           nag_suppressed;  // true after first nag-killer echo sent
 
-    uint32_t       frames_modified; // TX counter
+    uint32_t       frames_modified; // frames modified by logic before TX gate
+    uint32_t       frames_sent;     // frames successfully sent by CAN driver
+    uint32_t       tx_fail_count;   // send attempts rejected/failed by CAN driver
 
     // ── Feature flags (runtime-toggleable) ───────────────────────────────────
     bool           force_fsd;               // bypass UI selection check

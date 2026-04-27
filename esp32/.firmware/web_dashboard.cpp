@@ -272,7 +272,9 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
   <div class="card-head"><div class="icon ic-d">C</div><h2>CAN Bus</h2></div>
   <div class="sg">
     <div class="sb"><div class="sv" id="rxCnt">0</div><div class="sl">RX Frames</div></div>
-    <div class="sb"><div class="sv" id="txCnt">0</div><div class="sl">TX Modified</div></div>
+    <div class="sb"><div class="sv" id="txCnt">0</div><div class="sl">Modified</div></div>
+    <div class="sb"><div class="sv" id="txSent">0</div><div class="sl">TX Sent</div></div>
+    <div class="sb"><div class="sv" id="txFail">0</div><div class="sl">TX Failed</div></div>
     <div class="sb"><div class="sv" id="crcErr">0</div><div class="sl">CRC Errors</div></div>
     <div class="sb"><div class="sv" id="fps">0.0</div><div class="sl">Frames/s</div></div>
   </div>
@@ -576,6 +578,8 @@ function upd(d){
   // CAN stats
   if(document.getElementById('rxCnt')) document.getElementById('rxCnt').textContent=(d.rx_count||0).toLocaleString();
   if(document.getElementById('txCnt')) document.getElementById('txCnt').textContent=(d.tx_count||0).toLocaleString();
+  if(document.getElementById('txSent')) document.getElementById('txSent').textContent=(d.tx_sent||0).toLocaleString();
+  if(document.getElementById('txFail')) document.getElementById('txFail').textContent=(d.tx_failed||0).toLocaleString();
   if(document.getElementById('crcErr')) document.getElementById('crcErr').textContent=d.crc_errors||0;
   if(document.getElementById('fps')) document.getElementById('fps').textContent=(d.fps||0.0).toFixed(1);
 
@@ -839,6 +843,8 @@ static String build_json() {
     j += "\"bms_thermal_seen\":"; j += g_state->seen_bms_thermal;       j += ',';
     j += "\"rx_count\":";      j += g_state->rx_count;                 j += ',';
     j += "\"tx_count\":";      j += g_state->frames_modified;          j += ',';
+    j += "\"tx_sent\":";       j += g_state->frames_sent;              j += ',';
+    j += "\"tx_failed\":";     j += g_state->tx_fail_count;            j += ',';
     j += "\"crc_errors\":";    j += g_state->crc_err_count;            j += ',';
     j += "\"fps\":";           j += fps_s;                             j += ',';
     j += "\"bms\":";           j += bms;                               j += ',';

@@ -144,6 +144,14 @@ static void button_tick() {
     }
 }
 
+static void send_can_frame(const CanFrame& frame) {
+    if (g_can != nullptr && g_can->send(frame)) {
+        g_state.frames_sent++;
+    } else {
+        g_state.tx_fail_count++;
+    }
+}
+
 // ── LED refresh ───────────────────────────────────────────────────────────────
 static void update_led() {
     if (g_factory_reset_armed) {
@@ -224,7 +232,7 @@ static void process_frame(const CanFrame &frame) {
             uint8_t cnt_out = echo.data[6] & 0x0F;
             can_dump_log("NAG 0x370 hands_off lvl=%u cnt=%u->%u %s",
                          lvl, cnt_in, cnt_out, tx ? "TX echo" : "listen-only no-TX");
-            if (tx) g_can->send(echo);
+            if (tx) send_can_frame(echo);
         }
         return;
     }
@@ -239,7 +247,7 @@ static void process_frame(const CanFrame &frame) {
     if (frame.id == CAN_ID_AP_LEGACY && g_state.hw_version == TeslaHW_Legacy) {
         CanFrame f = frame;
         if (fsd_handle_legacy_autopilot(&g_state, &f) && tx)
-            g_can->send(f);
+            send_can_frame(f);
         return;
     }
 
@@ -272,7 +280,7 @@ static void process_frame(const CanFrame &frame) {
         g_state.suppress_speed_chime) {
         CanFrame f = frame;
         if (fsd_handle_isa_speed_chime(&f) && tx)
-            g_can->send(f);
+            send_can_frame(f);
         return;
     }
 
@@ -288,7 +296,7 @@ static void process_frame(const CanFrame &frame) {
     if (frame.id == CAN_ID_DAS_AP_CONFIG) {
         CanFrame f = frame;
         if (fsd_handle_tlssc_restore(&g_state, &f) && tx)
-            g_can->send(f);
+            send_can_frame(f);
         return;
     }
 
@@ -296,7 +304,7 @@ static void process_frame(const CanFrame &frame) {
     if (frame.id == CAN_ID_AP_CONTROL) {
         CanFrame f = frame;
         if (fsd_handle_autopilot_frame(&g_state, &f) && tx)
-            g_can->send(f);
+            send_can_frame(f);
         return;
     }
 }
@@ -359,7 +367,7 @@ static void can_task(void *param) {
             (now - last_precond_ms) >= PRECOND_INTERVAL_MS) {
             CanFrame pf;
             fsd_build_precondition_frame(&pf);
-            g_can->send(pf);
+            send_can_frame(pf);
             last_precond_ms = now;
         }
 
