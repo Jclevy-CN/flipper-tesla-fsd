@@ -816,7 +816,7 @@ static String build_json() {
     j += "\"hw4_offset\":";    j += (int)g_state->hw4_offset;          j += ',';
     j += "\"hw4_offset_percent_mode\":"; j += g_state->hw4_offset_percent_mode ? "true" : "false"; j += ',';
     j += "\"hw4_offset_active\":"; j += (int)g_state->hw4_offset_active; j += ',';
-    j += "\"das_speed_limit_kph\":"; j += (int)g_state->das_vision_speed_lim * 5; j += ',';
+    j += "\"das_speed_limit_kph\":"; j += (int)g_state->das_speed_limit_active * 5; j += ',';
     for (uint8_t i = 0; i < 3; ++i) {
         j += "\"hw4_tier"; j += i; j += "_limit\":"; j += (int)g_state->hw4_offset_tier_limit[i]; j += ',';
         j += "\"hw4_tier"; j += i; j += "_percent\":"; j += (int)g_state->hw4_offset_tier_percent[i]; j += ',';

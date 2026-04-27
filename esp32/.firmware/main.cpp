@@ -209,6 +209,7 @@ static void process_frame(const CanFrame &frame) {
 
     // ── DAS status (read-only, always) — gating for NAG killer ───────────────
     if (frame.id == CAN_ID_DAS_STATUS)  { fsd_handle_das_status(&g_state, &frame);  return; }
+    if (frame.id == CAN_ID_ISA_SPEED)   { fsd_handle_isa_speed_status(&g_state, &frame); }
 
     // ── Beyond here only run when TX is allowed ───────────────────────────────
     bool tx = fsd_can_transmit(&g_state);
@@ -494,6 +495,7 @@ void setup() {
     g_state.hw4_offset            = 0;
     g_state.hw4_offset_percent_mode = false;
     g_state.hw4_offset_active     = 0;
+    g_state.das_speed_limit_active = 0;
     g_state.bms_output            = false;
 
     prefs_load(&g_state);

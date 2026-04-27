@@ -230,13 +230,13 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
 
             // HW4 speed offset override: byte 1 bits 5:0.
             // Fixed mode: 0 disables override. Percent mode: write the computed
-            // value when a DAS speed limit is known, even when that value is 0.
+            // value when a valid DAS speed limit is known.
             uint8_t offset = state->hw4_offset;
             bool write_offset = (offset > 0);
             if (state->hw4_offset_percent_mode) {
                 offset = 0;
                 write_offset = false;
-                uint16_t limit_kph = (uint16_t)state->das_vision_speed_lim * 5u;
+                uint16_t limit_kph = (uint16_t)state->das_speed_limit_active * 5u;
                 if (limit_kph > 0) {
                     write_offset = true;
                     uint8_t percent = 0;
@@ -467,13 +467,33 @@ bool fsd_handle_tlssc_restore(FSDState *state, CanFrame *frame) {
     return true;
 }
 
+// ── AutopilotStatus / ISA speed (0x399) — HW4 speed-limit source ─────────────
+
+static bool fsd_valid_speed_limit_raw(uint8_t raw) {
+    // DBC: 0 = UNKNOWN/SNA, 31 = NONE. Valid limits are 1..30 (5..150 km/h).
+    return raw > 0u && raw < 31u;
+}
+
+void fsd_handle_isa_speed_status(FSDState *state, const CanFrame *frame) {
+    if (frame->dlc < 3) return;
+
+    state->das_fused_speed_lim  = frame->data[1] & 0x1Fu;
+    state->das_vision_speed_lim = frame->data[2] & 0x1Fu;
+
+    if (fsd_valid_speed_limit_raw(state->das_fused_speed_lim)) {
+        state->das_speed_limit_active = state->das_fused_speed_lim;
+    } else if (fsd_valid_speed_limit_raw(state->das_vision_speed_lim)) {
+        state->das_speed_limit_active = state->das_vision_speed_lim;
+    } else {
+        state->das_speed_limit_active = 0;
+    }
+}
+
 // ── DAS status (0x39B) — nag killer gating ───────────────────────────────────
 
 void fsd_handle_das_status(FSDState *state, const CanFrame *frame) {
     if (frame->dlc < 6) return;
     // DAS_autopilotHandsOnState: bit42|4 LE → byte5 bits[5:2]
     state->das_hands_on_state = (frame->data[5] >> 2) & 0x0Fu;
-    // DAS_visionOnlySpeedLimit: byte2 bits[4:0], raw value is in 5 km/h steps.
-    state->das_vision_speed_lim = frame->data[2] & 0x1Fu;
     state->das_seen = true;
 }
