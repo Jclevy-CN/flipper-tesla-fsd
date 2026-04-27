@@ -14,6 +14,7 @@
 #include "web_dashboard.h"
 #include "can_dump.h"
 #include "prefs.h"
+#include "wifi_manager.h"
 #include <WebServer.h>
 #include <WebSocketsServer.h>
 #include <WiFi.h>
@@ -921,6 +922,17 @@ static void handle_status() {
     g_http.send(200, "application/json", build_json());
 }
 
+static void handle_captive_portal() {
+    String ip = WiFi.softAPIP().toString();
+    String host = g_http.hostHeader();
+    if (host.length() > 0 && host != ip && host != ip + ":80") {
+        g_http.sendHeader("Location", "http://" + ip + "/", true);
+        g_http.send(302, "text/plain", "");
+        return;
+    }
+    handle_root();
+}
+
 static void handle_sdformat() {
     String result = sd_format_card();
     g_http.send(200, "application/json", result);
@@ -1045,6 +1057,15 @@ void web_dashboard_init(FSDState *state, CanDriver *can) {
     g_http.on("/sdformat",   HTTP_GET,  handle_sdformat);
     g_http.on("/restart",    HTTP_GET,  handle_restart);
     g_http.on("/update",     HTTP_POST, handle_ota_done, handle_ota_upload);
+    g_http.on("/generate_204", HTTP_GET, handle_captive_portal);
+    g_http.on("/gen_204", HTTP_GET, handle_captive_portal);
+    g_http.on("/hotspot-detect.html", HTTP_GET, handle_captive_portal);
+    g_http.on("/library/test/success.html", HTTP_GET, handle_captive_portal);
+    g_http.on("/connecttest.txt", HTTP_GET, handle_captive_portal);
+    g_http.on("/redirect", HTTP_GET, handle_captive_portal);
+    g_http.on("/success.txt", HTTP_GET, handle_captive_portal);
+    g_http.on("/fwlink", HTTP_GET, handle_captive_portal);
+    g_http.onNotFound(handle_captive_portal);
     g_http.begin();
 
     g_ws.begin();
@@ -1076,6 +1097,7 @@ static void web_server_task(void *param) {
 
     while (true) {
         if (g_state != nullptr) {
+            wifi_process_dns();
             g_http.handleClient();
             g_ws.loop();
 
