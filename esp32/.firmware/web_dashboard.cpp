@@ -192,6 +192,11 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
   border-radius:8px;border:1px solid rgba(77,171,247,.15);font-size:.72em;color:var(--text3);line-height:1.4}
 .btn-blue{background:rgba(77,171,247,.14);color:var(--blue);border:1px solid rgba(77,171,247,.3)}
 .btn-yellow{background:rgba(255,217,61,.14);color:var(--yellow);border:1px solid rgba(255,217,61,.3)}
+.logbox{background:#080d1c;border:1px solid rgba(148,163,184,.18);border-radius:8px;
+  min-height:150px;max-height:240px;overflow:auto;padding:10px 12px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.68em;
+  line-height:1.55;color:var(--text2);white-space:pre-wrap;word-break:break-word}
+.log-empty{color:var(--text3)}
 
 /* ── Footer ── */
 .foot{text-align:center;padding:16px 0 0;font-size:.64em;color:var(--text3)}
@@ -465,6 +470,12 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
   <button class="btn-main btn-yellow" onclick="restartDevice()" style="margin-top:12px">RESTART DEVICE</button>
 </div>
 
+<!-- Debug Log -->
+<div class="card">
+  <div class="card-head"><div class="icon ic-d">L</div><h2>Debug Log</h2></div>
+  <div id="debugLog" class="logbox"><span class="log-empty">Waiting for HW4 mux2 frames...</span></div>
+</div>
+
 <div class="foot">Tesla FSD ESP32 &middot; M5Stack ATOM Lite + ATOMIC CAN Base</div>
 </div><!-- /wrap -->
 
@@ -472,6 +483,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 var ws,rt,busy=0,wifiOnce=false;
 var HW=['Unknown','Legacy','HW3','HW4'];
 var CIRC=326.73;
+var logLines=[],lastLog='';
 
 function initWifi(d){
   if(wifiOnce)return;
@@ -495,6 +507,20 @@ function ring(p){
   var b=document.getElementById('socBar');
   b.style.strokeDashoffset=CIRC-(CIRC*Math.min(p,100)/100);
   b.style.stroke=socCol(p);
+}
+
+function appendLog(line){
+  if(!line || line===lastLog)return;
+  lastLog=line;
+  var t=new Date();
+  var ts=(t.getHours()<10?'0':'')+t.getHours()+':'+(t.getMinutes()<10?'0':'')+t.getMinutes()+':'+(t.getSeconds()<10?'0':'')+t.getSeconds();
+  logLines.push(ts+' '+line);
+  if(logLines.length>12)logLines.shift();
+  var box=document.getElementById('debugLog');
+  if(box){
+    box.textContent=logLines.join('\n');
+    box.scrollTop=box.scrollHeight;
+  }
 }
 
 function upd(d){
@@ -574,6 +600,7 @@ function upd(d){
   if(dasLimit) dasLimit.textContent=(d.das_speed_limit_kph>0)?(d.das_speed_limit_kph+' km/h'):'--';
   var activeOffset=document.getElementById('activeOffset');
   if(activeOffset) activeOffset.textContent=(d.hw4_offset_active||0)+' km/h';
+  appendLog(d.debug_log);
 
   // CAN stats
   if(document.getElementById('rxCnt')) document.getElementById('rxCnt').textContent=(d.rx_count||0).toLocaleString();
@@ -814,7 +841,7 @@ static String build_json() {
     snprintf(fps_s, sizeof(fps_s), "%.1f", g_fps);
 
     String j;
-    j.reserve(1152);
+    j.reserve(1408);
     j  = "{";
     j += "\"fsd_enabled\":";   j += g_state->fsd_enabled             ? "true" : "false"; j += ',';
     j += "\"op_mode\":";       j += (int)g_state->op_mode;            j += ',';
@@ -845,6 +872,7 @@ static String build_json() {
     j += "\"tx_count\":";      j += g_state->frames_modified;          j += ',';
     j += "\"tx_sent\":";       j += g_state->frames_sent;              j += ',';
     j += "\"tx_failed\":";     j += g_state->tx_fail_count;            j += ',';
+    j += "\"debug_log\":\"";   j += json_escape(g_state->web_debug_log); j += "\",";
     j += "\"crc_errors\":";    j += g_state->crc_err_count;            j += ',';
     j += "\"fps\":";           j += fps_s;                             j += ',';
     j += "\"bms\":";           j += bms;                               j += ',';

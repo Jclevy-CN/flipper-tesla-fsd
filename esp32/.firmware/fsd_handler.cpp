@@ -228,7 +228,9 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
             frame->data[7] &= ~(uint8_t)(0x07u << 5);
             frame->data[7] |=  (uint8_t)((state->speed_profile & 0x07u) << 5);
 
-            // HW4 speed offset override: byte 1 bits 5:0.
+            // HW4 speed offset override: mux2 bits 6..13.
+            // Encoding matches HW3 mux2: data[0] bits 7:6 hold raw bits 1:0,
+            // data[1] bits 5:0 hold raw bits 7:2.
             // Fixed mode: 0 disables override. Percent mode: write the computed
             // value when a valid DAS speed limit is known.
             uint8_t offset = state->hw4_offset;
@@ -252,7 +254,8 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
             }
             state->hw4_offset_active = offset;
             if (write_offset) {
-                frame->data[1] = (frame->data[1] & 0xC0u) | (offset & 0x3Fu);
+                frame->data[0] = (frame->data[0] & 0x3Fu) | (uint8_t)((offset & 0x03u) << 6);
+                frame->data[1] = (frame->data[1] & 0xC0u) | (uint8_t)((offset >> 2) & 0x3Fu);
             }
             modified = true;
         }

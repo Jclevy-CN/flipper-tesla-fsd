@@ -144,12 +144,88 @@ static void button_tick() {
     }
 }
 
-static void send_can_frame(const CanFrame& frame) {
+static bool send_can_frame(const CanFrame& frame) {
     if (g_can != nullptr && g_can->send(frame)) {
         g_state.frames_sent++;
+        return true;
     } else {
         g_state.tx_fail_count++;
+        return false;
     }
+}
+
+static uint8_t decode_hw4_mux2_offset_raw(const CanFrame& frame) {
+    return (uint8_t)(((frame.data[0] >> 6) & 0x03u) |
+                     ((frame.data[1] & 0x3Fu) << 2));
+}
+
+static void log_hw4_mux2_debug(const CanFrame& in,
+                               const CanFrame& out,
+                               bool modified,
+                               bool tx_allowed,
+                               bool sent) {
+    static uint32_t last_log_ms = 0;
+    static uint8_t last_raw_in = 0xFFu;
+    static uint8_t last_raw_out = 0xFFu;
+    static uint8_t last_target = 0xFFu;
+    static bool last_modified = false;
+    static bool last_tx_allowed = false;
+    static bool last_sent = false;
+
+    uint8_t raw_in = decode_hw4_mux2_offset_raw(in);
+    uint8_t raw_out = decode_hw4_mux2_offset_raw(out);
+    uint8_t target = g_state.hw4_offset_active;
+    uint32_t now = millis();
+    bool changed =
+        raw_in != last_raw_in ||
+        raw_out != last_raw_out ||
+        target != last_target ||
+        modified != last_modified ||
+        tx_allowed != last_tx_allowed ||
+        sent != last_sent;
+
+    if (!changed && (now - last_log_ms) < 1000u) return;
+
+    snprintf(g_state.web_debug_log, sizeof(g_state.web_debug_log),
+             "HW4 0x3FD mux2 b0:%02X->%02X b1:%02X->%02X raw:%u->%u "
+             "target=%u profile=%u limit=%u tx=%u mod=%u sent=%u",
+             in.data[0], out.data[0], in.data[1], out.data[1],
+             raw_in, raw_out,
+             target,
+             (unsigned)g_state.speed_profile,
+             (unsigned)g_state.das_speed_limit_active * 5u,
+             tx_allowed ? 1 : 0,
+             modified ? 1 : 0,
+             sent ? 1 : 0);
+
+    Serial.printf("[DBG] HW4 0x3FD mux2 b0:%02X->%02X b1:%02X->%02X "
+                  "raw:%u->%u target=%u profile=%u limit=%u tx=%u mod=%u sent=%u\n",
+                  in.data[0], out.data[0], in.data[1], out.data[1],
+                  raw_in, raw_out,
+                  target,
+                  (unsigned)g_state.speed_profile,
+                  (unsigned)g_state.das_speed_limit_active * 5u,
+                  tx_allowed ? 1 : 0,
+                  modified ? 1 : 0,
+                  sent ? 1 : 0);
+    can_dump_log("DBG HW4 0x3FD mux2 b0:%02X->%02X b1:%02X->%02X "
+                 "raw:%u->%u target=%u profile=%u limit=%u tx=%u mod=%u sent=%u",
+                 in.data[0], out.data[0], in.data[1], out.data[1],
+                 raw_in, raw_out,
+                 target,
+                 (unsigned)g_state.speed_profile,
+                 (unsigned)g_state.das_speed_limit_active * 5u,
+                 tx_allowed ? 1 : 0,
+                 modified ? 1 : 0,
+                 sent ? 1 : 0);
+
+    last_log_ms = now;
+    last_raw_in = raw_in;
+    last_raw_out = raw_out;
+    last_target = target;
+    last_modified = modified;
+    last_tx_allowed = tx_allowed;
+    last_sent = sent;
 }
 
 // ── LED refresh ───────────────────────────────────────────────────────────────
@@ -303,8 +379,15 @@ static void process_frame(const CanFrame &frame) {
     // HW3/HW4 autopilot control (0x3FD) — main FSD activation frame
     if (frame.id == CAN_ID_AP_CONTROL) {
         CanFrame f = frame;
-        if (fsd_handle_autopilot_frame(&g_state, &f) && tx)
-            send_can_frame(f);
+        bool is_hw4_mux2 = (g_state.hw_version == TeslaHW_HW4 &&
+                            frame.dlc >= 8 &&
+                            ((frame.data[0] & 0x07u) == 2u));
+        bool modified = fsd_handle_autopilot_frame(&g_state, &f);
+        bool sent = false;
+        if (modified && tx)
+            sent = send_can_frame(f);
+        if (is_hw4_mux2)
+            log_hw4_mux2_debug(frame, f, modified, tx, sent);
         return;
     }
 }
