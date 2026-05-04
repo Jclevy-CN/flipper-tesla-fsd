@@ -198,6 +198,17 @@ static bool send_can_frame(const CanFrame& frame) {
     }
 }
 
+static bool send_can_frame_if_allowed(const CanFrame& frame) {
+    FSDState state = state_snapshot();
+    if (!fsd_can_transmit(&state)) {
+        state_enter();
+        g_state.tx_fail_count++;
+        state_exit();
+        return false;
+    }
+    return send_can_frame(frame);
+}
+
 static uint8_t decode_hw4_mux2_offset_raw(const CanFrame& frame) {
     return (uint8_t)(frame.data[1] & 0x3Fu);
 }
@@ -378,7 +389,7 @@ static void process_frame(const CanFrame &frame) {
             uint8_t cnt_out = echo.data[6] & 0x0F;
             can_dump_log("NAG 0x370 hands_off lvl=%u cnt=%u->%u %s",
                          lvl, cnt_in, cnt_out, tx ? "TX echo" : "listen-only no-TX");
-            if (tx) send_can_frame(echo);
+            if (tx) send_can_frame_if_allowed(echo);
         }
         return;
     }
@@ -399,7 +410,7 @@ static void process_frame(const CanFrame &frame) {
         bool modified = fsd_handle_legacy_autopilot(&g_state, &f);
         state_exit();
         if (modified && tx)
-            send_can_frame(f);
+            send_can_frame_if_allowed(f);
         return;
     }
 
@@ -434,7 +445,7 @@ static void process_frame(const CanFrame &frame) {
         state.suppress_speed_chime) {
         CanFrame f = frame;
         if (fsd_handle_isa_speed_chime(&f) && tx)
-            send_can_frame(f);
+            send_can_frame_if_allowed(f);
         return;
     }
 
@@ -455,7 +466,7 @@ static void process_frame(const CanFrame &frame) {
         bool modified = fsd_handle_tlssc_restore(&g_state, &f);
         state_exit();
         if (modified && tx)
-            send_can_frame(f);
+            send_can_frame_if_allowed(f);
         return;
     }
 
@@ -471,7 +482,7 @@ static void process_frame(const CanFrame &frame) {
         state_exit();
         bool sent = false;
         if (modified && tx)
-            sent = send_can_frame(f);
+            sent = send_can_frame_if_allowed(f);
         if (is_hw4_mux2)
             log_hw4_mux2_debug(frame, f, modified, tx, sent);
         return;
@@ -541,7 +552,7 @@ static void can_task(void *param) {
             (now - last_precond_ms) >= PRECOND_INTERVAL_MS) {
             CanFrame pf;
             fsd_build_precondition_frame(&pf);
-            send_can_frame(pf);
+            send_can_frame_if_allowed(pf);
             last_precond_ms = now;
         }
 
