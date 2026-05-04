@@ -5,7 +5,7 @@
  * WS    :81  → pushes JSON state every 1 s; receives control commands
  *
  * All HTML/CSS/JS is embedded as a raw-string literal — no external CDN.
- * State is read directly from the FSDState pointer; controls write back to it.
+ * State is copied and updated under the shared FSDState lock.
  *
  * Web/WiFi work runs in a dedicated FreeRTOS task pinned to Core 0.
  * CAN work runs separately from main.cpp on Core 1.
@@ -25,8 +25,9 @@
 #include <freertos/task.h>
 
 // ── Module state ──────────────────────────────────────────────────────────────
-static FSDState  *g_state = nullptr;   // shared with main
-static CanDriver *g_can   = nullptr;   // for setListenOnly()
+static FSDState     *g_state     = nullptr;   // shared with main
+static portMUX_TYPE *g_state_mux = nullptr;   // owned by main
+static CanDriver    *g_can       = nullptr;   // for setListenOnly()
 
 static WebServer        g_http(80);
 static WebSocketsServer g_ws(81);
@@ -41,6 +42,22 @@ static TaskHandle_t g_web_task_handle = nullptr;
 #define CAN_VEHICLE_ALIVE_MS 3000u
 
 static void web_server_task(void *param);
+
+static void state_enter() {
+    if (g_state_mux != nullptr) portENTER_CRITICAL(g_state_mux);
+}
+
+static void state_exit() {
+    if (g_state_mux != nullptr) portEXIT_CRITICAL(g_state_mux);
+}
+
+static bool state_copy(FSDState *out) {
+    if (g_state == nullptr || out == nullptr) return false;
+    state_enter();
+    *out = *g_state;
+    state_exit();
+    return true;
+}
 
 // ── Embedded HTML/CSS/JS ──────────────────────────────────────────────────────
 // Tesla dark theme; mobile-first (max 480 px); WebSocket on :81
@@ -801,23 +818,26 @@ static String json_escape(const char *s) {
 
 // ── JSON builder ──────────────────────────────────────────────────────────────
 static String build_json() {
+    FSDState state;
+    if (!state_copy(&state)) return "{}";
+
     uint32_t uptime_s = (millis() - g_start_ms) / 1000;
     bool can_vehicle_detected = false;
-    if (g_state != nullptr && g_state->rx_count > 0) {
+    if (state.rx_count > 0) {
         can_vehicle_detected = (millis() - g_last_can_seen_ms) <= CAN_VEHICLE_ALIVE_MS;
     }
 
     // BMS sub-object
     char bms[128];
-    if (g_state->bms_seen) {
+    if (state.bms_seen) {
         snprintf(bms, sizeof(bms),
             "{\"seen\":true,\"voltage\":%.1f,\"current\":%.1f,"
             "\"soc\":%.1f,\"temp_min\":%d,\"temp_max\":%d}",
-            g_state->pack_voltage_v,
-            g_state->pack_current_a,
-            g_state->soc_percent,
-            (int)g_state->batt_temp_min_c,
-            (int)g_state->batt_temp_max_c);
+            state.pack_voltage_v,
+            state.pack_current_a,
+            state.soc_percent,
+            (int)state.batt_temp_min_c,
+            (int)state.batt_temp_max_c);
     } else {
         strcpy(bms, "{\"seen\":false}");
     }
@@ -843,46 +863,46 @@ static String build_json() {
     String j;
     j.reserve(1408);
     j  = "{";
-    j += "\"fsd_enabled\":";   j += g_state->fsd_enabled             ? "true" : "false"; j += ',';
-    j += "\"op_mode\":";       j += (int)g_state->op_mode;            j += ',';
-    j += "\"hw_version\":";    j += (int)g_state->hw_version;         j += ',';
-    j += "\"speed_profile\":"; j += (int)g_state->speed_profile;      j += ',';
-    j += "\"profile_mode_auto\":"; j += g_state->profile_mode_auto    ? "true" : "false"; j += ',';
-    j += "\"manual_speed_profile\":"; j += (int)g_state->manual_speed_profile; j += ',';
-    j += "\"hw4_offset\":";    j += (int)g_state->hw4_offset;          j += ',';
-    j += "\"hw4_offset_percent_mode\":"; j += g_state->hw4_offset_percent_mode ? "true" : "false"; j += ',';
-    j += "\"hw4_offset_active\":"; j += (int)g_state->hw4_offset_active; j += ',';
-    j += "\"das_speed_limit_kph\":"; j += (int)g_state->das_speed_limit_active * 5; j += ',';
+    j += "\"fsd_enabled\":";   j += state.fsd_enabled             ? "true" : "false"; j += ',';
+    j += "\"op_mode\":";       j += (int)state.op_mode;            j += ',';
+    j += "\"hw_version\":";    j += (int)state.hw_version;         j += ',';
+    j += "\"speed_profile\":"; j += (int)state.speed_profile;      j += ',';
+    j += "\"profile_mode_auto\":"; j += state.profile_mode_auto    ? "true" : "false"; j += ',';
+    j += "\"manual_speed_profile\":"; j += (int)state.manual_speed_profile; j += ',';
+    j += "\"hw4_offset\":";    j += (int)state.hw4_offset;          j += ',';
+    j += "\"hw4_offset_percent_mode\":"; j += state.hw4_offset_percent_mode ? "true" : "false"; j += ',';
+    j += "\"hw4_offset_active\":"; j += (int)state.hw4_offset_active; j += ',';
+    j += "\"das_speed_limit_kph\":"; j += (int)state.das_speed_limit_active * 5; j += ',';
     for (uint8_t i = 0; i < 3; ++i) {
-        j += "\"hw4_tier"; j += i; j += "_limit\":"; j += (int)g_state->hw4_offset_tier_limit[i]; j += ',';
-        j += "\"hw4_tier"; j += i; j += "_percent\":"; j += (int)g_state->hw4_offset_tier_percent[i]; j += ',';
+        j += "\"hw4_tier"; j += i; j += "_limit\":"; j += (int)state.hw4_offset_tier_limit[i]; j += ',';
+        j += "\"hw4_tier"; j += i; j += "_percent\":"; j += (int)state.hw4_offset_tier_percent[i]; j += ',';
     }
-    j += "\"ota\":";           j += g_state->tesla_ota_in_progress    ? "true" : "false"; j += ',';
-    j += "\"nag_killer\":";    j += g_state->nag_killer               ? "true" : "false"; j += ',';
-    j += "\"bms_output\":";    j += g_state->bms_output               ? "true" : "false"; j += ',';
-    j += "\"force_fsd\":";     j += g_state->force_fsd                ? "true" : "false"; j += ',';
-    j += "\"suppress_speed_chime\":"; j += g_state->suppress_speed_chime ? "true" : "false"; j += ',';
-    j += "\"china_mode\":";    j += g_state->china_mode               ? "true" : "false"; j += ',';
-    j += "\"tlssc_restore\":"; j += g_state->tlssc_restore            ? "true" : "false"; j += ',';
+    j += "\"ota\":";           j += state.tesla_ota_in_progress    ? "true" : "false"; j += ',';
+    j += "\"nag_killer\":";    j += state.nag_killer               ? "true" : "false"; j += ',';
+    j += "\"bms_output\":";    j += state.bms_output               ? "true" : "false"; j += ',';
+    j += "\"force_fsd\":";     j += state.force_fsd                ? "true" : "false"; j += ',';
+    j += "\"suppress_speed_chime\":"; j += state.suppress_speed_chime ? "true" : "false"; j += ',';
+    j += "\"china_mode\":";    j += state.china_mode               ? "true" : "false"; j += ',';
+    j += "\"tlssc_restore\":"; j += state.tlssc_restore            ? "true" : "false"; j += ',';
     j += "\"can_vehicle_detected\":"; j += can_vehicle_detected       ? "true" : "false"; j += ',';
-    j += "\"bms_hv_seen\":";   j += g_state->seen_bms_hv;              j += ',';
-    j += "\"bms_soc_seen\":";  j += g_state->seen_bms_soc;             j += ',';
-    j += "\"bms_thermal_seen\":"; j += g_state->seen_bms_thermal;       j += ',';
-    j += "\"rx_count\":";      j += g_state->rx_count;                 j += ',';
-    j += "\"tx_count\":";      j += g_state->frames_modified;          j += ',';
-    j += "\"tx_sent\":";       j += g_state->frames_sent;              j += ',';
-    j += "\"tx_failed\":";     j += g_state->tx_fail_count;            j += ',';
-    j += "\"debug_log\":\"";   j += json_escape(g_state->web_debug_log); j += "\",";
-    j += "\"crc_errors\":";    j += g_state->crc_err_count;            j += ',';
+    j += "\"bms_hv_seen\":";   j += state.seen_bms_hv;              j += ',';
+    j += "\"bms_soc_seen\":";  j += state.seen_bms_soc;             j += ',';
+    j += "\"bms_thermal_seen\":"; j += state.seen_bms_thermal;       j += ',';
+    j += "\"rx_count\":";      j += state.rx_count;                 j += ',';
+    j += "\"tx_count\":";      j += state.frames_modified;          j += ',';
+    j += "\"tx_sent\":";       j += state.frames_sent;              j += ',';
+    j += "\"tx_failed\":";     j += state.tx_fail_count;            j += ',';
+    j += "\"debug_log\":\"";   j += json_escape(state.web_debug_log); j += "\",";
+    j += "\"crc_errors\":";    j += state.crc_err_count;            j += ',';
     j += "\"fps\":";           j += fps_s;                             j += ',';
     j += "\"bms\":";           j += bms;                               j += ',';
     j += "\"uptime_s\":";      j += uptime_s;                          j += ',';
     j += "\"fw_build\":\"";    j += __DATE__;  j += ' '; j += __TIME__; j += "\",";
     j += "\"can_dump\":";      j += can_dump_active()                 ? "true" : "false"; j += ',';
-    j += "\"sleep_ms\":";     j += g_state->sleep_idle_ms;            j += ',';
-    j += "\"wifi_ssid\":\"";  j += json_escape(g_state->wifi_ssid);   j += "\",";
+    j += "\"sleep_ms\":";     j += state.sleep_idle_ms;            j += ',';
+    j += "\"wifi_ssid\":\"";  j += json_escape(state.wifi_ssid);   j += "\",";
     j += "\"wifi_pass\":\"***\",";
-    j += "\"wifi_hidden\":";  j += g_state->wifi_hidden               ? "true" : "false"; j += ',';
+    j += "\"wifi_hidden\":";  j += state.wifi_hidden               ? "true" : "false"; j += ',';
     j += "\"wifi_clients\":";  j += (int)WiFi.softAPgetStationNum();   j += ',';
     j += "\"ota_partition\":"; j += ota_part;
     j += '}';
@@ -912,91 +932,140 @@ static void ws_event(uint8_t num, WStype_t type,
     if (vptr) vptr = strstr(vptr, ":") + 1;
 
     if (strstr(buf, "\"mode\"")) {
+        FSDState saved;
+        bool active;
+        state_enter();
         if (g_state->op_mode == OpMode_ListenOnly) {
             g_state->op_mode = OpMode_Active;
-            if (g_can) g_can->setListenOnly(false);
-            Serial.println("[Web] → Active mode");
+            active = true;
         } else {
             g_state->op_mode = OpMode_ListenOnly;
-            if (g_can) g_can->setListenOnly(true);
-            Serial.println("[Web] → Listen-Only mode");
+            active = false;
         }
-        prefs_save(g_state);
+        saved = *g_state;
+        state_exit();
+        if (g_can) g_can->setListenOnly(!active);
+        Serial.println(active ? "[Web] → Active mode" : "[Web] → Listen-Only mode");
+        prefs_save(&saved);
     } else if (strstr(buf, "\"nag\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
-            g_state->nag_killer = (strncmp(vptr, "true", 4) == 0);
-            Serial.printf("[Web] NAG Killer: %s\n", g_state->nag_killer ? "ON" : "OFF");
-            prefs_save(g_state);
+            FSDState saved;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            state_enter();
+            g_state->nag_killer = enabled;
+            saved = *g_state;
+            state_exit();
+            Serial.printf("[Web] NAG Killer: %s\n", enabled ? "ON" : "OFF");
+            prefs_save(&saved);
         }
     } else if (strstr(buf, "\"bms\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
-            g_state->bms_output = (strncmp(vptr, "true", 4) == 0);
-            Serial.printf("[Web] BMS output: %s\n", g_state->bms_output ? "ON" : "OFF");
-            prefs_save(g_state);
+            FSDState saved;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            state_enter();
+            g_state->bms_output = enabled;
+            saved = *g_state;
+            state_exit();
+            Serial.printf("[Web] BMS output: %s\n", enabled ? "ON" : "OFF");
+            prefs_save(&saved);
         }
     } else if (strstr(buf, "\"tlssc_restore\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
-            g_state->tlssc_restore = (strncmp(vptr, "true", 4) == 0);
-            Serial.printf("[Web] TLSSC Restore: %s\n", g_state->tlssc_restore ? "ON" : "OFF");
-            prefs_save(g_state);
+            FSDState saved;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            state_enter();
+            g_state->tlssc_restore = enabled;
+            saved = *g_state;
+            state_exit();
+            Serial.printf("[Web] TLSSC Restore: %s\n", enabled ? "ON" : "OFF");
+            prefs_save(&saved);
         }
     } else if (strstr(buf, "\"force_fsd\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
-            g_state->force_fsd = (strncmp(vptr, "true", 4) == 0);
-            Serial.printf("[Web] Force FSD: %s\n", g_state->force_fsd ? "ON" : "OFF");
-            prefs_save(g_state);
+            FSDState saved;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            state_enter();
+            g_state->force_fsd = enabled;
+            saved = *g_state;
+            state_exit();
+            Serial.printf("[Web] Force FSD: %s\n", enabled ? "ON" : "OFF");
+            prefs_save(&saved);
         }
     } else if (strstr(buf, "\"suppress_speed_chime\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
-            g_state->suppress_speed_chime = (strncmp(vptr, "true", 4) == 0);
+            FSDState saved;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            state_enter();
+            g_state->suppress_speed_chime = enabled;
+            saved = *g_state;
+            state_exit();
             Serial.printf("[Web] Suppress Speed Chime: %s\n",
-                g_state->suppress_speed_chime ? "ON" : "OFF");
-            prefs_save(g_state);
+                enabled ? "ON" : "OFF");
+            prefs_save(&saved);
         }
     } else if (strstr(buf, "\"china_mode\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
-            g_state->china_mode = (strncmp(vptr, "true", 4) == 0);
-            Serial.printf("[Web] China Mode: %s\n", g_state->china_mode ? "ON" : "OFF");
-            prefs_save(g_state);
+            FSDState saved;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            state_enter();
+            g_state->china_mode = enabled;
+            saved = *g_state;
+            state_exit();
+            Serial.printf("[Web] China Mode: %s\n", enabled ? "ON" : "OFF");
+            prefs_save(&saved);
         }
     } else if (strstr(buf, "\"profile_mode_auto\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
-            g_state->profile_mode_auto = (strncmp(vptr, "true", 4) == 0);
-            if (!g_state->profile_mode_auto) {
+            FSDState saved;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            state_enter();
+            g_state->profile_mode_auto = enabled;
+            if (!enabled) {
                 g_state->speed_profile = g_state->manual_speed_profile;
             }
+            saved = *g_state;
+            state_exit();
             Serial.printf("[Web] Profile Mode: %s\n",
-                g_state->profile_mode_auto ? "Auto (Follow Distance)" : "Manual (Web UI)");
-            prefs_save(g_state);
+                enabled ? "Auto (Follow Distance)" : "Manual (Web UI)");
+            prefs_save(&saved);
         }
     } else if (strstr(buf, "\"manual_profile\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
             int val = atoi(vptr);
             if (val >= 0 && val <= 4) {
+                FSDState saved;
+                state_enter();
                 g_state->manual_speed_profile = (uint8_t)val;
                 if (!g_state->profile_mode_auto) {
                     g_state->speed_profile = val;
                 }
+                saved = *g_state;
+                state_exit();
                 const char *names[] = {"Chill", "Normal", "Hurry", "Max", "Sloth"};
                 Serial.printf("[Web] Manual Profile: %d (%s)\n", val, names[val]);
-                prefs_save(g_state);
+                prefs_save(&saved);
             }
         }
     } else if (strstr(buf, "\"hw4_offset_percent_mode\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
-            g_state->hw4_offset_percent_mode = (strncmp(vptr, "true", 4) == 0);
+            FSDState saved;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            state_enter();
+            g_state->hw4_offset_percent_mode = enabled;
+            saved = *g_state;
+            state_exit();
             Serial.printf("[Web] HW4 Offset Mode: %s\n",
-                g_state->hw4_offset_percent_mode ? "Percent" : "Fixed");
-            prefs_save(g_state);
+                enabled ? "Percent" : "Fixed");
+            prefs_save(&saved);
         }
     } else if (strstr(buf, "\"hw4_tier")) {
         if (vptr) {
@@ -1008,18 +1077,26 @@ static void ws_event(uint8_t num, WStype_t type,
                 if (strstr(buf, key)) {
                     if (val < 0) val = 0;
                     if (val > 155) val = 155;
+                    FSDState saved;
+                    state_enter();
                     g_state->hw4_offset_tier_limit[i] = (uint8_t)val;
+                    saved = *g_state;
+                    state_exit();
                     Serial.printf("[Web] HW4 Offset Tier %u Limit: %d km/h\n", i + 1, val);
-                    prefs_save(g_state);
+                    prefs_save(&saved);
                     break;
                 }
                 snprintf(key, sizeof(key), "\"hw4_tier%u_percent\"", i);
                 if (strstr(buf, key)) {
                     if (val < 0) val = 0;
                     if (val > 50) val = 50;
+                    FSDState saved;
+                    state_enter();
                     g_state->hw4_offset_tier_percent[i] = (uint8_t)val;
+                    saved = *g_state;
+                    state_exit();
                     Serial.printf("[Web] HW4 Offset Tier %u Percent: %d%%\n", i + 1, val);
-                    prefs_save(g_state);
+                    prefs_save(&saved);
                     break;
                 }
             }
@@ -1030,9 +1107,13 @@ static void ws_event(uint8_t num, WStype_t type,
             int val = atoi(vptr);
             if (val < 0) val = 0;
             if (val > 50) val = 50;
+            FSDState saved;
+            state_enter();
             g_state->hw4_offset = (uint8_t)val;
+            saved = *g_state;
+            state_exit();
             Serial.printf("[Web] HW4 Speed Offset: %d%%\n", val);
-            prefs_save(g_state);
+            prefs_save(&saved);
         }
     } else if (strstr(buf, "\"dump\"")) {
         if (vptr) {
@@ -1047,9 +1128,13 @@ static void ws_event(uint8_t num, WStype_t type,
             while (*vptr == ' ' || *vptr == ':') vptr++;
             uint32_t val = (uint32_t)atoi(vptr);
             if (val >= 10000) { // minimum 10s
+                FSDState saved;
+                state_enter();
                 g_state->sleep_idle_ms = val;
+                saved = *g_state;
+                state_exit();
                 Serial.printf("[Web] Sleep timeout: %u ms\n", val);
-                prefs_save(g_state);
+                prefs_save(&saved);
             }
         }
     } else if (strstr(buf, "\"wifi_cfg\"")) {
@@ -1059,6 +1144,8 @@ static void ws_event(uint8_t num, WStype_t type,
             char *s = strstr(vobj, "\"ssid\":\"");
             char *p = strstr(vobj, "\"pass\":\"");
             char *h = strstr(vobj, "\"hidden\":");
+            FSDState saved;
+            state_enter();
             if (s) {
                 s += 8;
                 char *end = strchr(s, '\"');
@@ -1090,9 +1177,11 @@ static void ws_event(uint8_t num, WStype_t type,
                 if (strncmp(h, "true", 4) == 0) g_state->wifi_hidden = true;
                 else if (strncmp(h, "false", 5) == 0) g_state->wifi_hidden = false;
             }
+            saved = *g_state;
+            state_exit();
             Serial.printf("[Web] WiFi config: SSID=\"%s\" PASS=*** HIDDEN=%d\n",
-                g_state->wifi_ssid, g_state->wifi_hidden);
-            prefs_save(g_state);
+                saved.wifi_ssid, saved.wifi_hidden);
+            prefs_save(&saved);
             delay(500);
             ESP.restart();
         }
@@ -1231,13 +1320,16 @@ static void handle_ota_done() {
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
-void web_dashboard_init(FSDState *state, CanDriver *can) {
+void web_dashboard_init(FSDState *state, CanDriver *can, portMUX_TYPE *state_mux) {
     g_state       = state;
+    g_state_mux   = state_mux;
     g_can         = can;
     g_start_ms    = millis();
     g_last_fps_ms = millis();
-    g_last_rx     = state ? state->rx_count : 0;
-    g_last_can_seen_ms = (state && state->rx_count > 0) ? millis() : 0;
+    FSDState initial_state;
+    bool has_state = state_copy(&initial_state);
+    g_last_rx     = has_state ? initial_state.rx_count : 0;
+    g_last_can_seen_ms = (has_state && initial_state.rx_count > 0) ? millis() : 0;
 
     g_http.on("/",           HTTP_GET,  handle_root);
     g_http.on("/api/status", HTTP_GET,  handle_status);
@@ -1291,7 +1383,12 @@ static void web_server_task(void *param) {
             // FPS calculation + 1 Hz WebSocket broadcast
             uint32_t now = millis();
             if ((now - g_last_fps_ms) >= 1000u) {
-                uint32_t rx = g_state->rx_count;
+                FSDState state;
+                if (!state_copy(&state)) {
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                    continue;
+                }
+                uint32_t rx = state.rx_count;
                 float    dt = (now - g_last_fps_ms) / 1000.0f;
                 if (rx != g_last_rx) g_last_can_seen_ms = now;
                 g_fps        = (float)(rx - g_last_rx) / dt;

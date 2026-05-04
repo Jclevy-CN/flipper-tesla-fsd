@@ -1,5 +1,6 @@
 #pragma once
 
+#include <freertos/FreeRTOS.h>
 #include "fsd_handler.h"
 #include "can_driver.h"
 
@@ -18,10 +19,11 @@
 /**
  * Initialise HTTP and WebSocket servers.
  *
- * @param state  Pointer to the shared FSDState (read + written by command handler)
- * @param can    Pointer to the active CanDriver (used by mode-toggle command)
+ * @param state      Pointer to the shared FSDState (read + written by command handler)
+ * @param can        Pointer to the active CanDriver (used by mode-toggle command)
+ * @param state_mux  Shared mux guarding FSDState across Web/Core 0 and CAN/Core 1
  */
-void web_dashboard_init(FSDState *state, CanDriver *can);
+void web_dashboard_init(FSDState *state, CanDriver *can, portMUX_TYPE *state_mux);
 
 /** Compatibility no-op; Web work runs in the Core 0 task. */
 void web_dashboard_update();
