@@ -202,12 +202,14 @@ bool fsd_handle_autopilot_frame(FSDState* state, CANFRAME* frame) {
             modified = true;
         }
         if(mux == 2) {
-            frame->buffer[7] &= ~(0x07 << 5);
-            frame->buffer[7] |= (uint8_t)((state->speed_profile & 0x07) << 5);
-            // HW4 speed offset runtime override
-            // Source: ev-open-can-tools hw4OffsetRuntime
+            frame->buffer[7] &= ~(0x07 << 4);
+            frame->buffer[7] |= (uint8_t)((state->speed_profile & 0x07) << 4);
+
+            // HW4 speed offset: byte[1] bits 5:0 are percent, byte[0] stays untouched.
             if(state->hw4_offset > 0) {
-                frame->buffer[1] = (frame->buffer[1] & 0xC0) | (state->hw4_offset & 0x3F);
+                uint8_t offset = state->hw4_offset;
+                if(offset > 50) offset = 50;
+                frame->buffer[1] = (frame->buffer[1] & 0xC0) | (offset & 0x3F);
             }
             modified = true;
         }

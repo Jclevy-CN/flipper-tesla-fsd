@@ -144,6 +144,89 @@ static void button_tick() {
     }
 }
 
+static bool send_can_frame(const CanFrame& frame) {
+    if (g_can != nullptr && g_can->send(frame)) {
+        g_state.frames_sent++;
+        return true;
+    } else {
+        g_state.tx_fail_count++;
+        return false;
+    }
+}
+
+static uint8_t decode_hw4_mux2_offset_raw(const CanFrame& frame) {
+    return (uint8_t)(frame.data[1] & 0x3Fu);
+}
+
+static void log_hw4_mux2_debug(const CanFrame& in,
+                               const CanFrame& out,
+                               bool modified,
+                               bool tx_allowed,
+                               bool sent) {
+    static uint32_t last_log_ms = 0;
+    static uint8_t last_raw_in = 0xFFu;
+    static uint8_t last_raw_out = 0xFFu;
+    static uint8_t last_target = 0xFFu;
+    static bool last_modified = false;
+    static bool last_tx_allowed = false;
+    static bool last_sent = false;
+
+    uint8_t raw_in = decode_hw4_mux2_offset_raw(in);
+    uint8_t raw_out = decode_hw4_mux2_offset_raw(out);
+    uint8_t target = g_state.hw4_offset_active;
+    uint32_t now = millis();
+    bool changed =
+        raw_in != last_raw_in ||
+        raw_out != last_raw_out ||
+        target != last_target ||
+        modified != last_modified ||
+        tx_allowed != last_tx_allowed ||
+        sent != last_sent;
+
+    if (!changed && (now - last_log_ms) < 1000u) return;
+
+    snprintf(g_state.web_debug_log, sizeof(g_state.web_debug_log),
+             "HW4 0x3FD mux2 b0:%02X->%02X b1:%02X->%02X raw:%u->%u "
+             "target=%u profile=%u limit=%u tx=%u mod=%u sent=%u",
+             in.data[0], out.data[0], in.data[1], out.data[1],
+             raw_in, raw_out,
+             target,
+             (unsigned)g_state.speed_profile,
+             (unsigned)g_state.das_speed_limit_active * 5u,
+             tx_allowed ? 1 : 0,
+             modified ? 1 : 0,
+             sent ? 1 : 0);
+
+    Serial.printf("[DBG] HW4 0x3FD mux2 b0:%02X->%02X b1:%02X->%02X "
+                  "raw:%u->%u target=%u profile=%u limit=%u tx=%u mod=%u sent=%u\n",
+                  in.data[0], out.data[0], in.data[1], out.data[1],
+                  raw_in, raw_out,
+                  target,
+                  (unsigned)g_state.speed_profile,
+                  (unsigned)g_state.das_speed_limit_active * 5u,
+                  tx_allowed ? 1 : 0,
+                  modified ? 1 : 0,
+                  sent ? 1 : 0);
+    can_dump_log("DBG HW4 0x3FD mux2 b0:%02X->%02X b1:%02X->%02X "
+                 "raw:%u->%u target=%u profile=%u limit=%u tx=%u mod=%u sent=%u",
+                 in.data[0], out.data[0], in.data[1], out.data[1],
+                 raw_in, raw_out,
+                 target,
+                 (unsigned)g_state.speed_profile,
+                 (unsigned)g_state.das_speed_limit_active * 5u,
+                 tx_allowed ? 1 : 0,
+                 modified ? 1 : 0,
+                 sent ? 1 : 0);
+
+    last_log_ms = now;
+    last_raw_in = raw_in;
+    last_raw_out = raw_out;
+    last_target = target;
+    last_modified = modified;
+    last_tx_allowed = tx_allowed;
+    last_sent = sent;
+}
+
 // ── LED refresh ───────────────────────────────────────────────────────────────
 static void update_led() {
     if (g_factory_reset_armed) {
@@ -209,6 +292,7 @@ static void process_frame(const CanFrame &frame) {
 
     // ── DAS status (read-only, always) — gating for NAG killer ───────────────
     if (frame.id == CAN_ID_DAS_STATUS)  { fsd_handle_das_status(&g_state, &frame);  return; }
+    if (frame.id == CAN_ID_ISA_SPEED)   { fsd_handle_isa_speed_status(&g_state, &frame); }
 
     // ── Beyond here only run when TX is allowed ───────────────────────────────
     bool tx = fsd_can_transmit(&g_state);
@@ -223,7 +307,7 @@ static void process_frame(const CanFrame &frame) {
             uint8_t cnt_out = echo.data[6] & 0x0F;
             can_dump_log("NAG 0x370 hands_off lvl=%u cnt=%u->%u %s",
                          lvl, cnt_in, cnt_out, tx ? "TX echo" : "listen-only no-TX");
-            if (tx) g_can->send(echo);
+            if (tx) send_can_frame(echo);
         }
         return;
     }
@@ -238,7 +322,7 @@ static void process_frame(const CanFrame &frame) {
     if (frame.id == CAN_ID_AP_LEGACY && g_state.hw_version == TeslaHW_Legacy) {
         CanFrame f = frame;
         if (fsd_handle_legacy_autopilot(&g_state, &f) && tx)
-            g_can->send(f);
+            send_can_frame(f);
         return;
     }
 
@@ -271,7 +355,7 @@ static void process_frame(const CanFrame &frame) {
         g_state.suppress_speed_chime) {
         CanFrame f = frame;
         if (fsd_handle_isa_speed_chime(&f) && tx)
-            g_can->send(f);
+            send_can_frame(f);
         return;
     }
 
@@ -287,15 +371,22 @@ static void process_frame(const CanFrame &frame) {
     if (frame.id == CAN_ID_DAS_AP_CONFIG) {
         CanFrame f = frame;
         if (fsd_handle_tlssc_restore(&g_state, &f) && tx)
-            g_can->send(f);
+            send_can_frame(f);
         return;
     }
 
     // HW3/HW4 autopilot control (0x3FD) — main FSD activation frame
     if (frame.id == CAN_ID_AP_CONTROL) {
         CanFrame f = frame;
-        if (fsd_handle_autopilot_frame(&g_state, &f) && tx)
-            g_can->send(f);
+        bool is_hw4_mux2 = (g_state.hw_version == TeslaHW_HW4 &&
+                            frame.dlc >= 8 &&
+                            ((frame.data[0] & 0x07u) == 2u));
+        bool modified = fsd_handle_autopilot_frame(&g_state, &f);
+        bool sent = false;
+        if (modified && tx)
+            sent = send_can_frame(f);
+        if (is_hw4_mux2)
+            log_hw4_mux2_debug(frame, f, modified, tx, sent);
         return;
     }
 }
@@ -358,7 +449,7 @@ static void can_task(void *param) {
             (now - last_precond_ms) >= PRECOND_INTERVAL_MS) {
             CanFrame pf;
             fsd_build_precondition_frame(&pf);
-            g_can->send(pf);
+            send_can_frame(pf);
             last_precond_ms = now;
         }
 
@@ -494,6 +585,7 @@ void setup() {
     g_state.hw4_offset            = 0;
     g_state.hw4_offset_percent_mode = false;
     g_state.hw4_offset_active     = 0;
+    g_state.das_speed_limit_active = 0;
     g_state.bms_output            = false;
 
     prefs_load(&g_state);

@@ -192,6 +192,11 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
   border-radius:8px;border:1px solid rgba(77,171,247,.15);font-size:.72em;color:var(--text3);line-height:1.4}
 .btn-blue{background:rgba(77,171,247,.14);color:var(--blue);border:1px solid rgba(77,171,247,.3)}
 .btn-yellow{background:rgba(255,217,61,.14);color:var(--yellow);border:1px solid rgba(255,217,61,.3)}
+.logbox{background:#080d1c;border:1px solid rgba(148,163,184,.18);border-radius:8px;
+  min-height:150px;max-height:240px;overflow:auto;padding:10px 12px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.68em;
+  line-height:1.55;color:var(--text2);white-space:pre-wrap;word-break:break-word}
+.log-empty{color:var(--text3)}
 
 /* ── Footer ── */
 .foot{text-align:center;padding:16px 0 0;font-size:.64em;color:var(--text3)}
@@ -272,7 +277,9 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
   <div class="card-head"><div class="icon ic-d">C</div><h2>CAN Bus</h2></div>
   <div class="sg">
     <div class="sb"><div class="sv" id="rxCnt">0</div><div class="sl">RX Frames</div></div>
-    <div class="sb"><div class="sv" id="txCnt">0</div><div class="sl">TX Modified</div></div>
+    <div class="sb"><div class="sv" id="txCnt">0</div><div class="sl">Modified</div></div>
+    <div class="sb"><div class="sv" id="txSent">0</div><div class="sl">TX Sent</div></div>
+    <div class="sb"><div class="sv" id="txFail">0</div><div class="sl">TX Failed</div></div>
     <div class="sb"><div class="sv" id="crcErr">0</div><div class="sl">CRC Errors</div></div>
     <div class="sb"><div class="sv" id="fps">0.0</div><div class="sl">Frames/s</div></div>
   </div>
@@ -293,6 +300,10 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
   <div class="row">
     <span class="lbl">Force FSD</span>
     <label class="sw"><input type="checkbox" id="swFsd" onchange="cmd('force_fsd',this.checked)"><span class="sl2"></span></label>
+  </div>
+  <div class="row">
+    <span class="lbl">Suppress Speed Chime</span>
+    <label class="sw"><input type="checkbox" id="swChime" onchange="cmd('suppress_speed_chime',this.checked)"><span class="sl2"></span></label>
   </div>
   <div class="row">
     <span class="lbl">China Mode</span>
@@ -339,8 +350,8 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
   <div class="row" id="fixedOffsetRow">
     <span class="lbl">Fixed Offset</span>
     <div class="num-ctrl">
-      <input type="number" id="numHw4Offset" min="0" max="63" step="1" onchange="setHw4Offset(this.value)">
-      <span>km/h</span>
+      <input type="number" id="numHw4Offset" min="0" max="50" step="1" onchange="setHw4Offset(this.value)">
+      <span>%</span>
     </div>
   </div>
   <div class="row">
@@ -360,7 +371,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <div class="tier-row">
       <span class="lbl">Offset 1</span>
       <span class="tier-mid">+</span>
-      <div class="num-ctrl"><input type="number" id="tierPct0" min="0" max="100" step="1" onchange="setHw4Tier(0,'percent',this.value)"><span>%</span></div>
+      <div class="num-ctrl"><input type="number" id="tierPct0" min="0" max="50" step="1" onchange="setHw4Tier(0,'percent',this.value)"><span>%</span></div>
     </div>
     <div class="tier-row">
       <span class="lbl">Limit 2</span>
@@ -370,7 +381,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <div class="tier-row">
       <span class="lbl">Offset 2</span>
       <span class="tier-mid">+</span>
-      <div class="num-ctrl"><input type="number" id="tierPct1" min="0" max="100" step="1" onchange="setHw4Tier(1,'percent',this.value)"><span>%</span></div>
+      <div class="num-ctrl"><input type="number" id="tierPct1" min="0" max="50" step="1" onchange="setHw4Tier(1,'percent',this.value)"><span>%</span></div>
     </div>
     <div class="tier-row">
       <span class="lbl">Limit 3</span>
@@ -380,7 +391,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <div class="tier-row">
       <span class="lbl">Offset 3</span>
       <span class="tier-mid">+</span>
-      <div class="num-ctrl"><input type="number" id="tierPct2" min="0" max="100" step="1" onchange="setHw4Tier(2,'percent',this.value)"><span>%</span></div>
+      <div class="num-ctrl"><input type="number" id="tierPct2" min="0" max="50" step="1" onchange="setHw4Tier(2,'percent',this.value)"><span>%</span></div>
     </div>
   </div>
 </div>
@@ -459,6 +470,12 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
   <button class="btn-main btn-yellow" onclick="restartDevice()" style="margin-top:12px">RESTART DEVICE</button>
 </div>
 
+<!-- Debug Log -->
+<div class="card">
+  <div class="card-head"><div class="icon ic-d">L</div><h2>Debug Log</h2></div>
+  <div id="debugLog" class="logbox"><span class="log-empty">Waiting for HW4 mux2 frames...</span></div>
+</div>
+
 <div class="foot">Tesla FSD ESP32 &middot; M5Stack ATOM Lite + ATOMIC CAN Base</div>
 </div><!-- /wrap -->
 
@@ -466,6 +483,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 var ws,rt,busy=0,wifiOnce=false;
 var HW=['Unknown','Legacy','HW3','HW4'];
 var CIRC=326.73;
+var logLines=[],lastLog='';
 
 function initWifi(d){
   if(wifiOnce)return;
@@ -489,6 +507,20 @@ function ring(p){
   var b=document.getElementById('socBar');
   b.style.strokeDashoffset=CIRC-(CIRC*Math.min(p,100)/100);
   b.style.stroke=socCol(p);
+}
+
+function appendLog(line){
+  if(!line || line===lastLog)return;
+  lastLog=line;
+  var t=new Date();
+  var ts=(t.getHours()<10?'0':'')+t.getHours()+':'+(t.getMinutes()<10?'0':'')+t.getMinutes()+':'+(t.getSeconds()<10?'0':'')+t.getSeconds();
+  logLines.push(ts+' '+line);
+  if(logLines.length>12)logLines.shift();
+  var box=document.getElementById('debugLog');
+  if(box){
+    box.textContent=logLines.join('\n');
+    box.scrollTop=box.scrollHeight;
+  }
 }
 
 function upd(d){
@@ -525,6 +557,7 @@ function upd(d){
   if(document.getElementById('swNag')) document.getElementById('swNag').checked=d.nag_killer;
   if(document.getElementById('swBms')) document.getElementById('swBms').checked=d.bms_output;
   if(document.getElementById('swFsd')) document.getElementById('swFsd').checked=d.force_fsd;
+  if(document.getElementById('swChime')) document.getElementById('swChime').checked=d.suppress_speed_chime;
   if(document.getElementById('swChina')) document.getElementById('swChina').checked=d.china_mode;
   if(document.getElementById('swTlssc')) document.getElementById('swTlssc').checked=d.tlssc_restore;
   if(document.getElementById('swDump')) document.getElementById('swDump').checked=!!d.can_dump;
@@ -566,11 +599,14 @@ function upd(d){
   var dasLimit=document.getElementById('dasLimit');
   if(dasLimit) dasLimit.textContent=(d.das_speed_limit_kph>0)?(d.das_speed_limit_kph+' km/h'):'--';
   var activeOffset=document.getElementById('activeOffset');
-  if(activeOffset) activeOffset.textContent=(d.hw4_offset_active||0)+' km/h';
+  if(activeOffset) activeOffset.textContent=(d.hw4_offset_active||0)+'%';
+  appendLog(d.debug_log);
 
   // CAN stats
   if(document.getElementById('rxCnt')) document.getElementById('rxCnt').textContent=(d.rx_count||0).toLocaleString();
   if(document.getElementById('txCnt')) document.getElementById('txCnt').textContent=(d.tx_count||0).toLocaleString();
+  if(document.getElementById('txSent')) document.getElementById('txSent').textContent=(d.tx_sent||0).toLocaleString();
+  if(document.getElementById('txFail')) document.getElementById('txFail').textContent=(d.tx_failed||0).toLocaleString();
   if(document.getElementById('crcErr')) document.getElementById('crcErr').textContent=d.crc_errors||0;
   if(document.getElementById('fps')) document.getElementById('fps').textContent=(d.fps||0.0).toFixed(1);
 
@@ -692,7 +728,7 @@ function setHw4Offset(value){
   var val=parseInt(value,10);
   if(isNaN(val))val=0;
   if(val<0)val=0;
-  if(val>63)val=63;
+  if(val>50)val=50;
   var input=document.getElementById('numHw4Offset');
   if(input)input.value=val;
   cmd('hw4_offset',val);
@@ -724,7 +760,7 @@ function setHw4Tier(idx,field,value){
     if(val>155)val=155;
   }else{
     if(val<0)val=0;
-    if(val>100)val=100;
+    if(val>50)val=50;
   }
   var input=document.getElementById((field==='limit'?'tierLimit':'tierPct')+idx);
   if(input)input.value=val;
@@ -805,7 +841,7 @@ static String build_json() {
     snprintf(fps_s, sizeof(fps_s), "%.1f", g_fps);
 
     String j;
-    j.reserve(1152);
+    j.reserve(1408);
     j  = "{";
     j += "\"fsd_enabled\":";   j += g_state->fsd_enabled             ? "true" : "false"; j += ',';
     j += "\"op_mode\":";       j += (int)g_state->op_mode;            j += ',';
@@ -816,7 +852,7 @@ static String build_json() {
     j += "\"hw4_offset\":";    j += (int)g_state->hw4_offset;          j += ',';
     j += "\"hw4_offset_percent_mode\":"; j += g_state->hw4_offset_percent_mode ? "true" : "false"; j += ',';
     j += "\"hw4_offset_active\":"; j += (int)g_state->hw4_offset_active; j += ',';
-    j += "\"das_speed_limit_kph\":"; j += (int)g_state->das_vision_speed_lim * 5; j += ',';
+    j += "\"das_speed_limit_kph\":"; j += (int)g_state->das_speed_limit_active * 5; j += ',';
     for (uint8_t i = 0; i < 3; ++i) {
         j += "\"hw4_tier"; j += i; j += "_limit\":"; j += (int)g_state->hw4_offset_tier_limit[i]; j += ',';
         j += "\"hw4_tier"; j += i; j += "_percent\":"; j += (int)g_state->hw4_offset_tier_percent[i]; j += ',';
@@ -825,6 +861,7 @@ static String build_json() {
     j += "\"nag_killer\":";    j += g_state->nag_killer               ? "true" : "false"; j += ',';
     j += "\"bms_output\":";    j += g_state->bms_output               ? "true" : "false"; j += ',';
     j += "\"force_fsd\":";     j += g_state->force_fsd                ? "true" : "false"; j += ',';
+    j += "\"suppress_speed_chime\":"; j += g_state->suppress_speed_chime ? "true" : "false"; j += ',';
     j += "\"china_mode\":";    j += g_state->china_mode               ? "true" : "false"; j += ',';
     j += "\"tlssc_restore\":"; j += g_state->tlssc_restore            ? "true" : "false"; j += ',';
     j += "\"can_vehicle_detected\":"; j += can_vehicle_detected       ? "true" : "false"; j += ',';
@@ -833,6 +870,9 @@ static String build_json() {
     j += "\"bms_thermal_seen\":"; j += g_state->seen_bms_thermal;       j += ',';
     j += "\"rx_count\":";      j += g_state->rx_count;                 j += ',';
     j += "\"tx_count\":";      j += g_state->frames_modified;          j += ',';
+    j += "\"tx_sent\":";       j += g_state->frames_sent;              j += ',';
+    j += "\"tx_failed\":";     j += g_state->tx_fail_count;            j += ',';
+    j += "\"debug_log\":\"";   j += json_escape(g_state->web_debug_log); j += "\",";
     j += "\"crc_errors\":";    j += g_state->crc_err_count;            j += ',';
     j += "\"fps\":";           j += fps_s;                             j += ',';
     j += "\"bms\":";           j += bms;                               j += ',';
@@ -910,6 +950,14 @@ static void ws_event(uint8_t num, WStype_t type,
             Serial.printf("[Web] Force FSD: %s\n", g_state->force_fsd ? "ON" : "OFF");
             prefs_save(g_state);
         }
+    } else if (strstr(buf, "\"suppress_speed_chime\"")) {
+        if (vptr) {
+            while (*vptr == ' ' || *vptr == ':') vptr++;
+            g_state->suppress_speed_chime = (strncmp(vptr, "true", 4) == 0);
+            Serial.printf("[Web] Suppress Speed Chime: %s\n",
+                g_state->suppress_speed_chime ? "ON" : "OFF");
+            prefs_save(g_state);
+        }
     } else if (strstr(buf, "\"china_mode\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
@@ -968,7 +1016,7 @@ static void ws_event(uint8_t num, WStype_t type,
                 snprintf(key, sizeof(key), "\"hw4_tier%u_percent\"", i);
                 if (strstr(buf, key)) {
                     if (val < 0) val = 0;
-                    if (val > 100) val = 100;
+                    if (val > 50) val = 50;
                     g_state->hw4_offset_tier_percent[i] = (uint8_t)val;
                     Serial.printf("[Web] HW4 Offset Tier %u Percent: %d%%\n", i + 1, val);
                     prefs_save(g_state);
@@ -981,9 +1029,9 @@ static void ws_event(uint8_t num, WStype_t type,
             while (*vptr == ' ' || *vptr == ':') vptr++;
             int val = atoi(vptr);
             if (val < 0) val = 0;
-            if (val > 63) val = 63;
+            if (val > 50) val = 50;
             g_state->hw4_offset = (uint8_t)val;
-            Serial.printf("[Web] HW4 Speed Offset: %d km/h\n", val);
+            Serial.printf("[Web] HW4 Speed Offset: %d%%\n", val);
             prefs_save(g_state);
         }
     } else if (strstr(buf, "\"dump\"")) {

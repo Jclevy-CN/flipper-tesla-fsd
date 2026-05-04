@@ -34,7 +34,10 @@ struct FSDState {
     bool           fsd_enabled;     // true when car's UI has FSD selected (mux0)
     bool           nag_suppressed;  // true after first nag-killer echo sent
 
-    uint32_t       frames_modified; // TX counter
+    uint32_t       frames_modified; // frames modified by logic before TX gate
+    uint32_t       frames_sent;     // frames successfully sent by CAN driver
+    uint32_t       tx_fail_count;   // send attempts rejected/failed by CAN driver
+    char           web_debug_log[224]; // latest debug line for Web UI log window
 
     // ── Feature flags (runtime-toggleable) ───────────────────────────────────
     bool           force_fsd;               // bypass UI selection check
@@ -88,12 +91,14 @@ struct FSDState {
     // ── Driving Mode Control (HW4) ───────────────────────────────────────────
     bool           profile_mode_auto;          // true=Follow Distance stalk, false=Web UI
     uint8_t        manual_speed_profile;       // manually selected profile in Web UI (0-4)
-    uint8_t        hw4_offset;                 // HW4 speed offset override (0-63, 0=disabled)
+    uint8_t        hw4_offset;                 // HW4 speed offset percent (0-50, 0=disabled)
     bool           hw4_offset_percent_mode;    // true=calculate offset from DAS speed limit
     uint8_t        hw4_offset_tier_limit[3];   // speed limit thresholds in km/h
     uint8_t        hw4_offset_tier_percent[3]; // offset percent for each threshold
-    uint8_t        hw4_offset_active;          // last offset written to mux=2, in km/h
+    uint8_t        hw4_offset_active;          // last offset percent written to mux=2
+    uint8_t        das_fused_speed_lim;        // DAS_fusedSpeedLimit raw value, x5 = km/h
     uint8_t        das_vision_speed_lim;       // DAS_visionOnlySpeedLimit raw value, x5 = km/h
+    uint8_t        das_speed_limit_active;     // selected valid limit raw value, x5 = km/h
 
     // ── DAS status (0x39B) — nag killer gating ───────────────────────────────
     // 0=NOT_REQD, 8=SUSPENDED — both mean DAS is satisfied, skip echo.
@@ -159,6 +164,9 @@ void fsd_build_precondition_frame(CanFrame *frame);
  *  Overwrites byte[0] lower 6 bits to 0x1B (SELF_DRIVING).
  *  Returns true if frame was modified and should be re-sent. */
 bool fsd_handle_tlssc_restore(FSDState *state, CanFrame *frame);
+
+/** Parse AutopilotStatus / ISA speed (0x399) — updates HW4 speed-limit state. */
+void fsd_handle_isa_speed_status(FSDState *state, const CanFrame *frame);
 
 /** Parse DAS_status (0x39B) — updates das_hands_on_state for nag killer gating. */
 void fsd_handle_das_status(FSDState *state, const CanFrame *frame);
