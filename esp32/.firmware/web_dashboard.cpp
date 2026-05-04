@@ -1221,8 +1221,11 @@ static void handle_restart() {
 }
 
 // ── OTA Update handlers ───────────────────────────────────────────────────────
+static const uint8_t ESP_IMAGE_MAGIC = 0xE9u;
 static size_t ota_total_size = 0;
+static size_t ota_max_size = 0;
 static bool ota_error_flag = false;
+static bool ota_magic_checked = false;
 
 static void handle_ota_upload() {
     HTTPUpload& upload = g_http.upload();
@@ -1231,6 +1234,8 @@ static void handle_ota_upload() {
         Serial.printf("[OTA] Start: %s\n", upload.filename.c_str());
         ota_error_flag = false;
         ota_total_size = 0;
+        ota_max_size = 0;
+        ota_magic_checked = false;
 
         if (!upload.filename.endsWith(".bin")) {
             Serial.println("[OTA] ERROR: File must be .bin");
@@ -1238,15 +1243,17 @@ static void handle_ota_upload() {
             return;
         }
 
-        size_t max_size = UPDATE_SIZE_UNKNOWN;
         const esp_partition_t* partition = esp_ota_get_next_update_partition(NULL);
-        if (partition != NULL) {
-            max_size = partition->size;
-            Serial.printf("[OTA] Target partition: %s, size: %u bytes\n",
-                partition->label, (unsigned)max_size);
+        if (partition == NULL || partition->size == 0) {
+            Serial.println("[OTA] ERROR: No valid OTA target partition");
+            ota_error_flag = true;
+            return;
         }
+        ota_max_size = partition->size;
+        Serial.printf("[OTA] Target partition: %s, size: %u bytes\n",
+            partition->label, (unsigned)ota_max_size);
 
-        if (!Update.begin(max_size, U_FLASH)) {
+        if (!Update.begin(ota_max_size, U_FLASH)) {
             Update.printError(Serial);
             Serial.println("[OTA] ERROR: Update.begin() failed");
             ota_error_flag = true;
@@ -1256,6 +1263,27 @@ static void handle_ota_upload() {
         Serial.println("[OTA] Update started successfully");
     } else if (upload.status == UPLOAD_FILE_WRITE) {
         if (ota_error_flag) return;
+        if (upload.currentSize == 0) return;
+
+        if (!ota_magic_checked) {
+            ota_magic_checked = true;
+            if (upload.buf[0] != ESP_IMAGE_MAGIC) {
+                Serial.printf("[OTA] ERROR: Invalid ESP32 image magic 0x%02X (expected 0x%02X)\n",
+                    upload.buf[0], ESP_IMAGE_MAGIC);
+                ota_error_flag = true;
+                Update.abort();
+                return;
+            }
+        }
+
+        if (ota_max_size == 0 || ota_total_size + upload.currentSize > ota_max_size) {
+            Serial.printf("[OTA] ERROR: Firmware too large (%u > %u bytes)\n",
+                (unsigned)(ota_total_size + upload.currentSize),
+                (unsigned)ota_max_size);
+            ota_error_flag = true;
+            Update.abort();
+            return;
+        }
 
         size_t written = Update.write(upload.buf, upload.currentSize);
         if (written != upload.currentSize) {
@@ -1266,13 +1294,19 @@ static void handle_ota_upload() {
             return;
         }
 
-        ota_total_size = upload.totalSize;
+        ota_total_size += written;
         if (ota_total_size % 65536 == 0) {
             Serial.printf("[OTA] Progress: %u bytes\n", (unsigned)ota_total_size);
         }
     } else if (upload.status == UPLOAD_FILE_END) {
         if (ota_error_flag) {
             Serial.println("[OTA] Upload aborted due to previous error");
+            Update.abort();
+            return;
+        }
+        if (!ota_magic_checked || ota_total_size == 0) {
+            Serial.println("[OTA] ERROR: Empty or invalid firmware image");
+            ota_error_flag = true;
             Update.abort();
             return;
         }
