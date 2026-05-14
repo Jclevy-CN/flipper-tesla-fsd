@@ -55,6 +55,10 @@ static void apply_detected_hw(TeslaHWVersion hw, const char *reason) {
     if (hw == TeslaHW_Unknown) return;
 
     state_enter();
+    if (!g_state.hw_mode_auto) {
+        state_exit();
+        return;
+    }
     if (g_state.hw_version == hw) {
         state_exit();
         return;
@@ -338,7 +342,7 @@ static void process_frame(const CanFrame &frame) {
     if (saw_gtw_car_config) {
         TeslaHWVersion hw = fsd_detect_hw_version(&frame);
         FSDState state = state_snapshot();
-        if (hw != TeslaHW_Unknown && state.hw_version == TeslaHW_Unknown)
+        if (hw != TeslaHW_Unknown && state.hw_version == TeslaHW_Unknown && state.hw_mode_auto)
             apply_detected_hw(hw, "0x398");
         return;
     }
@@ -416,7 +420,7 @@ static void process_frame(const CanFrame &frame) {
 
     // Auto-upgrade Legacy→HW3: Palladium S/X with HW3 reports das_hw=0
     // (→Legacy) but actually uses 0x3FD. True Legacy never broadcasts 0x3FD.
-    if (state.hw_version == TeslaHW_Legacy && saw_ap_control) {
+    if (state.hw_mode_auto && state.hw_version == TeslaHW_Legacy && saw_ap_control) {
         apply_detected_hw(TeslaHW_HW3, "upgrade:Legacy→HW3(0x3FD seen)");
         state = state_snapshot();
     }
@@ -425,7 +429,12 @@ static void process_frame(const CanFrame &frame) {
     // Delay 0x3FD→HW3 fallback to avoid misclassifying HW4 (which also has
     // 0x3FD) before 0x399 arrives. 0x3EE and 0x399 are unambiguous.
     static uint32_t hw_fallback_3fd_count = 0;
-    if (state.hw_version == TeslaHW_Unknown) {
+    static TeslaHWVersion hw_fallback_last_hw = TeslaHW_Unknown;
+    if (state.hw_version != hw_fallback_last_hw) {
+        hw_fallback_3fd_count = 0;
+        hw_fallback_last_hw = state.hw_version;
+    }
+    if (state.hw_mode_auto && state.hw_version == TeslaHW_Unknown) {
         if (frame.id == CAN_ID_AP_LEGACY) {
             apply_detected_hw(TeslaHW_Legacy, "fallback:0x3EE");
         } else if (frame.id == CAN_ID_ISA_SPEED) {
@@ -688,6 +697,10 @@ void setup() {
     g_state.china_mode            = false;
     g_state.profile_mode_auto     = true;
     g_state.manual_speed_profile  = 1;
+    g_state.hw3_offset_auto       = true;
+    g_state.hw3_offset            = 0;
+    g_state.hw3_offset_percent_mode = false;
+    g_state.hw3_offset_active     = 0;
     g_state.hw4_offset            = 0;
     g_state.hw4_offset_percent_mode = false;
     g_state.hw4_offset_active     = 0;

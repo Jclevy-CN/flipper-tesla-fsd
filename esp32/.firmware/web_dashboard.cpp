@@ -338,6 +338,18 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <span class="lbl">Deep Sleep (sec)</span>
     <input type="number" id="numSleep" min="10" max="3600" style="width:60px;background:var(--card2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;text-align:right" onchange="cmd('sleep',parseInt(this.value)*1000)">
   </div>
+  <div class="row">
+    <span class="lbl">Hardware Source</span>
+    <div class="seg-group">
+      <button class="seg-btn active" id="btnHwAuto" onclick="setHwAuto(true)">Auto</button>
+      <button class="seg-btn" id="btnHwMan" onclick="setHwAuto(false)">Manual</button>
+    </div>
+  </div>
+  <div class="mode-row" id="hwRow">
+    <div class="mode-card" data-hw="1" onclick="selectHW(1)"><div class="mode-name">Legacy</div></div>
+    <div class="mode-card active" data-hw="2" onclick="selectHW(2)"><div class="mode-name">HW3</div></div>
+    <div class="mode-card" data-hw="3" onclick="selectHW(3)"><div class="mode-name">HW4</div></div>
+  </div>
 </div>
 
 <!-- Driving Profile -->
@@ -357,11 +369,19 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <div class="mode-card" data-val="0" onclick="selectProfile(0)"><div class="mode-name">Chill</div></div>
     <div class="mode-card" data-val="4" onclick="selectProfile(4)"><div class="mode-name">Sloth</div></div>
   </div>
-  <div class="row">
+  <div class="row" id="hw3OffsetModeRow">
     <span class="lbl">Offset Mode</span>
     <div class="seg-group">
-      <button class="seg-btn active" id="btnOffFixed" onclick="setOffsetMode(false)">Fixed</button>
+      <button class="seg-btn active" id="btnOffAuto" onclick="setHw3OffsetMode('auto')">Auto</button>
+      <button class="seg-btn" id="btnOffFixed" onclick="setOffsetMode(false)">Fixed</button>
       <button class="seg-btn" id="btnOffPct" onclick="setOffsetMode(true)">%</button>
+    </div>
+  </div>
+  <div class="row" id="hw3OffsetRow">
+    <span class="lbl">Fixed Offset</span>
+    <div class="num-ctrl">
+      <input type="number" id="numHw3Offset" min="0" max="50" step="1" onchange="setHw3Offset(this.value)">
+      <span>%</span>
     </div>
   </div>
   <div class="row" id="fixedOffsetRow">
@@ -371,11 +391,11 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
       <span>%</span>
     </div>
   </div>
-  <div class="row">
+  <div class="row" id="dasLimitRow">
     <span class="lbl">Current Limit</span>
     <span id="dasLimit" style="font-size:.85em;color:var(--text2)">--</span>
   </div>
-  <div class="row">
+  <div class="row" id="activeOffsetRow">
     <span class="lbl">Active Offset</span>
     <span id="activeOffset" style="font-size:.85em;color:var(--text2)">--</span>
   </div>
@@ -383,32 +403,32 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <div class="tier-row">
       <span class="lbl">Limit 1</span>
       <span class="tier-mid">&le;</span>
-      <div class="num-ctrl"><input type="number" id="tierLimit0" min="0" max="155" step="5" onchange="setHw4Tier(0,'limit',this.value)"><span>km/h</span></div>
+      <div class="num-ctrl"><input type="number" id="tierLimit0" min="0" max="155" step="5" onchange="setOffsetTier(0,'limit',this.value)"><span>km/h</span></div>
     </div>
     <div class="tier-row">
       <span class="lbl">Offset 1</span>
       <span class="tier-mid">+</span>
-      <div class="num-ctrl"><input type="number" id="tierPct0" min="0" max="50" step="1" onchange="setHw4Tier(0,'percent',this.value)"><span>%</span></div>
+      <div class="num-ctrl"><input type="number" id="tierPct0" min="0" max="50" step="1" onchange="setOffsetTier(0,'percent',this.value)"><span>%</span></div>
     </div>
     <div class="tier-row">
       <span class="lbl">Limit 2</span>
       <span class="tier-mid">&le;</span>
-      <div class="num-ctrl"><input type="number" id="tierLimit1" min="0" max="155" step="5" onchange="setHw4Tier(1,'limit',this.value)"><span>km/h</span></div>
+      <div class="num-ctrl"><input type="number" id="tierLimit1" min="0" max="155" step="5" onchange="setOffsetTier(1,'limit',this.value)"><span>km/h</span></div>
     </div>
     <div class="tier-row">
       <span class="lbl">Offset 2</span>
       <span class="tier-mid">+</span>
-      <div class="num-ctrl"><input type="number" id="tierPct1" min="0" max="50" step="1" onchange="setHw4Tier(1,'percent',this.value)"><span>%</span></div>
+      <div class="num-ctrl"><input type="number" id="tierPct1" min="0" max="50" step="1" onchange="setOffsetTier(1,'percent',this.value)"><span>%</span></div>
     </div>
     <div class="tier-row">
       <span class="lbl">Limit 3</span>
       <span class="tier-mid">&le;</span>
-      <div class="num-ctrl"><input type="number" id="tierLimit2" min="0" max="155" step="5" onchange="setHw4Tier(2,'limit',this.value)"><span>km/h</span></div>
+      <div class="num-ctrl"><input type="number" id="tierLimit2" min="0" max="155" step="5" onchange="setOffsetTier(2,'limit',this.value)"><span>km/h</span></div>
     </div>
     <div class="tier-row">
       <span class="lbl">Offset 3</span>
       <span class="tier-mid">+</span>
-      <div class="num-ctrl"><input type="number" id="tierPct2" min="0" max="50" step="1" onchange="setHw4Tier(2,'percent',this.value)"><span>%</span></div>
+      <div class="num-ctrl"><input type="number" id="tierPct2" min="0" max="50" step="1" onchange="setOffsetTier(2,'percent',this.value)"><span>%</span></div>
     </div>
   </div>
 </div>
@@ -497,7 +517,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 </div><!-- /wrap -->
 
 <script>
-var ws,rt,busy=0,wifiOnce=false;
+var ws,rt,busy=0,wifiOnce=false,offsetHw=0,lastState=null;
 var HW=['Unknown','Legacy','HW3','HW4'];
 var CIRC=326.73;
 var logLines=[],lastLog='';
@@ -584,9 +604,29 @@ function upd(d){
   
   pill('dumpSt',d.can_dump,d.can_dump?'Recording':'Idle');
 
-  // Driving profile (HW4 only)
+  // Hardware override
+  if(d.hw_mode_auto!==undefined){
+    var hwAuto=document.getElementById('btnHwAuto');
+    var hwMan=document.getElementById('btnHwMan');
+    if(hwAuto&&hwMan){
+      hwAuto.className=d.hw_mode_auto?'seg-btn active':'seg-btn';
+      hwMan.className=d.hw_mode_auto?'seg-btn':'seg-btn active';
+    }
+    document.querySelectorAll('#hwRow .mode-card').forEach(function(c){
+      c.classList.toggle('disabled',d.hw_mode_auto);
+    });
+  }
+  var selectedHw=d.hw_mode_auto?d.hw_version:d.manual_hw_version;
+  document.querySelectorAll('#hwRow .mode-card').forEach(function(c){
+    c.classList.toggle('active',c.dataset.hw===String(selectedHw));
+  });
+
+  // Driving profile (HW3/HW4)
   var profCard=document.getElementById('profileCard');
-  if(profCard) profCard.style.display=(d.hw_version===3)?'block':'none';
+  var isHw3=d.hw_version===2;
+  var isHw4=d.hw_version===3;
+  offsetHw=d.hw_version||0;
+  if(profCard) profCard.style.display=(isHw3||isHw4)?'block':'none';
   if(d.profile_mode_auto!==undefined){
     var btnAuto=document.getElementById('btnProfAuto');
     var btnMan=document.getElementById('btnProfMan');
@@ -598,25 +638,46 @@ function upd(d){
       c.classList.toggle('disabled',d.profile_mode_auto);
     });
   }
-  var activeProfile=d.profile_mode_auto?d.speed_profile:d.manual_speed_profile;
+  var activeProfile=d.speed_profile;
   document.querySelectorAll('#modeRow .mode-card').forEach(function(c){
-    c.classList.toggle('active',c.dataset.val===String(activeProfile));
+    var val=parseInt(c.dataset.val,10);
+    var overMax=isHw3 && val>2;
+    c.classList.toggle('disabled',d.profile_mode_auto||overMax);
+    c.classList.toggle('active',!overMax && c.dataset.val===String(activeProfile));
   });
+  var hw3AutoRow=document.getElementById('hw3OffsetModeRow');
+  var hw3Row=document.getElementById('hw3OffsetRow');
+  if(hw3AutoRow) hw3AutoRow.style.display=(isHw3||isHw4)?'flex':'none';
+  if(hw3Row) hw3Row.style.display=(isHw3 && !d.hw3_offset_auto && !d.hw3_offset_percent_mode)?'flex':'none';
+  syncOffsetButtons(isHw3?!!d.hw3_offset_auto:false,isHw3?!!d.hw3_offset_percent_mode:!!d.hw4_offset_percent_mode,isHw3);
+  var hw3off=document.getElementById('numHw3Offset');
+  if(hw3off && document.activeElement.id!=='numHw3Offset' && d.hw3_offset!==undefined){
+    hw3off.value=d.hw3_offset;
+  }
   var hw4off=document.getElementById('numHw4Offset');
   if(hw4off && document.activeElement.id!=='numHw4Offset' && d.hw4_offset!==undefined){
     hw4off.value=d.hw4_offset;
   }
-  if(d.hw4_offset_percent_mode!==undefined) syncOffsetMode(!!d.hw4_offset_percent_mode);
+  syncOffsetMode(isHw3?!!d.hw3_offset_percent_mode:!!d.hw4_offset_percent_mode,isHw3,isHw4);
+  if(isHw3 && d.hw3_offset_auto){
+    if(hw3Row) hw3Row.style.display='none';
+    var pctBoxAuto=document.getElementById('pctOffsetBox');
+    if(pctBoxAuto) pctBoxAuto.style.display='none';
+  }
+  var activeRow=document.getElementById('activeOffsetRow');
+  if(activeRow && isHw3) activeRow.style.display='flex';
   for(var ti=0;ti<3;ti++){
     var lim=document.getElementById('tierLimit'+ti);
     var pct=document.getElementById('tierPct'+ti);
-    if(lim && document.activeElement.id!==lim.id && d['hw4_tier'+ti+'_limit']!==undefined) lim.value=d['hw4_tier'+ti+'_limit'];
-    if(pct && document.activeElement.id!==pct.id && d['hw4_tier'+ti+'_percent']!==undefined) pct.value=d['hw4_tier'+ti+'_percent'];
+    var prefix=isHw3?'hw3_tier':'hw4_tier';
+    if(lim && document.activeElement.id!==lim.id && d[prefix+ti+'_limit']!==undefined) lim.value=d[prefix+ti+'_limit'];
+    if(pct && document.activeElement.id!==pct.id && d[prefix+ti+'_percent']!==undefined) pct.value=d[prefix+ti+'_percent'];
+    if(pct) pct.max='50';
   }
   var dasLimit=document.getElementById('dasLimit');
   if(dasLimit) dasLimit.textContent=(d.das_speed_limit_kph>0)?(d.das_speed_limit_kph+' km/h'):'--';
   var activeOffset=document.getElementById('activeOffset');
-  if(activeOffset) activeOffset.textContent=(d.hw4_offset_active||0)+'%';
+  if(activeOffset) activeOffset.textContent=isHw3?((d.hw3_offset_active||0)+'%'):((d.hw4_offset_active||0)+'%');
   appendLog(d.debug_log);
 
   // CAN stats
@@ -718,6 +779,64 @@ function cmd(c,v){
 }
 function toggleMode(){ cmd('mode',null); }
 
+function setHwAuto(isAuto){
+  var hwAuto=document.getElementById('btnHwAuto');
+  var hwMan=document.getElementById('btnHwMan');
+  if(hwAuto&&hwMan){
+    hwAuto.className=isAuto?'seg-btn active':'seg-btn';
+    hwMan.className=isAuto?'seg-btn':'seg-btn active';
+  }
+  document.querySelectorAll('#hwRow .mode-card').forEach(function(c){
+    c.classList.toggle('disabled',isAuto);
+  });
+  if(isAuto){
+    applyLocalHwSelection(0);
+    cmd('hw_mode_auto',true);
+  }else{
+    var active=document.querySelector('#hwRow .mode-card.active');
+    var val=active?parseInt(active.dataset.hw,10):(lastState?lastState.manual_hw_version:2);
+    val=val||2;
+    applyLocalHwSelection(val);
+    cmd('manual_hw_version',val);
+  }
+}
+
+function applyLocalHwSelection(val){
+  offsetHw=val;
+  var isHw3=val===2;
+  var isHw4=val===3;
+  var profCard=document.getElementById('profileCard');
+  if(profCard)profCard.style.display=(isHw3||isHw4)?'block':'none';
+  var profileAuto=lastState?!!lastState.profile_mode_auto:false;
+  document.querySelectorAll('#modeRow .mode-card').forEach(function(c){
+    var p=parseInt(c.dataset.val,10);
+    var overMax=isHw3&&p>2;
+    c.classList.toggle('disabled',profileAuto||overMax);
+    if(overMax)c.classList.remove('active');
+  });
+  var autoMode=isHw3&&lastState?!!lastState.hw3_offset_auto:false;
+  var percentMode=lastState?(isHw3?!!lastState.hw3_offset_percent_mode:!!lastState.hw4_offset_percent_mode):false;
+  syncOffsetButtons(autoMode,percentMode,isHw3);
+  syncOffsetMode(percentMode,isHw3,isHw4);
+  if(isHw3&&autoMode){
+    var row=document.getElementById('hw3OffsetRow');
+    var pctBox=document.getElementById('pctOffsetBox');
+    if(row)row.style.display='none';
+    if(pctBox)pctBox.style.display='none';
+  }
+}
+
+function selectHW(val){
+  var card=document.querySelector('#hwRow .mode-card[data-hw="'+val+'"]');
+  if(!card || card.classList.contains('disabled'))return;
+  document.querySelectorAll('#hwRow .mode-card').forEach(function(c){
+    c.classList.remove('active');
+  });
+  card.classList.add('active');
+  applyLocalHwSelection(val);
+  cmd('manual_hw_version',val);
+}
+
 function setProfileMode(isAuto){
   var btnAuto=document.getElementById('btnProfAuto');
   var btnMan=document.getElementById('btnProfMan');
@@ -741,6 +860,41 @@ function selectProfile(val){
   cmd('manual_profile',val);
 }
 
+function syncOffsetButtons(autoMode,percentMode,isHw3){
+  var autoBtn=document.getElementById('btnOffAuto');
+  var fixedBtn=document.getElementById('btnOffFixed');
+  var pctBtn=document.getElementById('btnOffPct');
+  if(autoBtn){
+    autoBtn.style.display=isHw3?'inline-block':'none';
+    autoBtn.className=autoMode?'seg-btn active':'seg-btn';
+  }
+  if(fixedBtn)fixedBtn.className=(!autoMode&&!percentMode)?'seg-btn active':'seg-btn';
+  if(pctBtn)pctBtn.className=(!autoMode&&percentMode)?'seg-btn active':'seg-btn';
+}
+
+function setHw3OffsetMode(mode){
+  if(offsetHw!==2)return;
+  var autoMode=(mode==='auto');
+  var percentMode=(mode==='percent');
+  syncOffsetButtons(autoMode,percentMode,true);
+  var row=document.getElementById('hw3OffsetRow');
+  var pctBox=document.getElementById('pctOffsetBox');
+  if(row)row.style.display=(!autoMode&&!percentMode)?'flex':'none';
+  if(pctBox)pctBox.style.display=(!autoMode&&percentMode)?'block':'none';
+  cmd('hw3_offset_auto',autoMode);
+  if(!autoMode)cmd('hw3_offset_percent_mode',percentMode);
+}
+
+function setHw3Offset(value){
+  var val=parseInt(value,10);
+  if(isNaN(val))val=0;
+  if(val<0)val=0;
+  if(val>50)val=50;
+  var input=document.getElementById('numHw3Offset');
+  if(input)input.value=val;
+  cmd('hw3_offset',val);
+}
+
 function setHw4Offset(value){
   var val=parseInt(value,10);
   if(isNaN(val))val=0;
@@ -751,25 +905,32 @@ function setHw4Offset(value){
   cmd('hw4_offset',val);
 }
 
-function syncOffsetMode(percent){
-  var btnFixed=document.getElementById('btnOffFixed');
-  var btnPct=document.getElementById('btnOffPct');
+function syncOffsetMode(percent,showHw3,showHw4){
+  var modeRow=document.getElementById('hw3OffsetModeRow');
+  var hw3Row=document.getElementById('hw3OffsetRow');
   var fixedRow=document.getElementById('fixedOffsetRow');
   var pctBox=document.getElementById('pctOffsetBox');
-  if(btnFixed&&btnPct){
-    btnFixed.className=percent?'seg-btn':'seg-btn active';
-    btnPct.className=percent?'seg-btn active':'seg-btn';
-  }
-  if(fixedRow)fixedRow.style.display=percent?'none':'flex';
-  if(pctBox)pctBox.style.display=percent?'block':'none';
+  var limitRow=document.getElementById('dasLimitRow');
+  var activeRow=document.getElementById('activeOffsetRow');
+  if(modeRow)modeRow.style.display=(showHw3||showHw4)?'flex':'none';
+  if(hw3Row)hw3Row.style.display=(showHw3&&!percent)?'flex':'none';
+  if(fixedRow)fixedRow.style.display=(showHw4&&!percent)?'flex':'none';
+  if(pctBox)pctBox.style.display=((showHw3||showHw4)&&percent)?'block':'none';
+  if(limitRow)limitRow.style.display=(showHw3||showHw4)?'flex':'none';
+  if(activeRow)activeRow.style.display=(showHw3||showHw4)?'flex':'none';
 }
 
 function setOffsetMode(percent){
-  syncOffsetMode(percent);
+  if(offsetHw===2){
+    setHw3OffsetMode(percent?'percent':'fixed');
+    return;
+  }
+  syncOffsetButtons(false,percent,false);
+  syncOffsetMode(percent,false,true);
   cmd('hw4_offset_percent_mode',!!percent);
 }
 
-function setHw4Tier(idx,field,value){
+function setOffsetTier(idx,field,value){
   var val=parseInt(value,10);
   if(isNaN(val))val=0;
   if(field==='limit'){
@@ -781,7 +942,7 @@ function setHw4Tier(idx,field,value){
   }
   var input=document.getElementById((field==='limit'?'tierLimit':'tierPct')+idx);
   if(input)input.value=val;
-  cmd('hw4_tier'+idx+'_'+field,val);
+  cmd((offsetHw===2?'hw3_tier':'hw4_tier')+idx+'_'+field,val);
 }
 
 function conn(){
@@ -791,7 +952,7 @@ function conn(){
     document.getElementById('connErr').style.display='none';
     clearTimeout(rt);
   };
-  ws.onmessage=function(e){ try{var d=JSON.parse(e.data);initWifi(d);upd(d);}catch(x){} };
+  ws.onmessage=function(e){ try{var d=JSON.parse(e.data);lastState=d;initWifi(d);upd(d);}catch(x){} };
   ws.onclose=function(){
     document.getElementById('dot').className='cdot off';
     document.getElementById('connErr').style.display='block';
@@ -866,14 +1027,22 @@ static String build_json() {
     j += "\"fsd_enabled\":";   j += state.fsd_enabled             ? "true" : "false"; j += ',';
     j += "\"op_mode\":";       j += (int)state.op_mode;            j += ',';
     j += "\"hw_version\":";    j += (int)state.hw_version;         j += ',';
+    j += "\"hw_mode_auto\":";  j += state.hw_mode_auto             ? "true" : "false"; j += ',';
+    j += "\"manual_hw_version\":"; j += (int)state.manual_hw_version; j += ',';
     j += "\"speed_profile\":"; j += (int)state.speed_profile;      j += ',';
     j += "\"profile_mode_auto\":"; j += state.profile_mode_auto    ? "true" : "false"; j += ',';
     j += "\"manual_speed_profile\":"; j += (int)state.manual_speed_profile; j += ',';
+    j += "\"hw3_offset_auto\":"; j += state.hw3_offset_auto        ? "true" : "false"; j += ',';
+    j += "\"hw3_offset\":";    j += (int)state.hw3_offset;          j += ',';
+    j += "\"hw3_offset_percent_mode\":"; j += state.hw3_offset_percent_mode ? "true" : "false"; j += ',';
+    j += "\"hw3_offset_active\":"; j += (int)state.hw3_offset_active; j += ',';
     j += "\"hw4_offset\":";    j += (int)state.hw4_offset;          j += ',';
     j += "\"hw4_offset_percent_mode\":"; j += state.hw4_offset_percent_mode ? "true" : "false"; j += ',';
     j += "\"hw4_offset_active\":"; j += (int)state.hw4_offset_active; j += ',';
     j += "\"das_speed_limit_kph\":"; j += (int)state.das_speed_limit_active * 5; j += ',';
     for (uint8_t i = 0; i < 3; ++i) {
+        j += "\"hw3_tier"; j += i; j += "_limit\":"; j += (int)state.hw3_offset_tier_limit[i]; j += ',';
+        j += "\"hw3_tier"; j += i; j += "_percent\":"; j += (int)state.hw3_offset_tier_percent[i]; j += ',';
         j += "\"hw4_tier"; j += i; j += "_limit\":"; j += (int)state.hw4_offset_tier_limit[i]; j += ',';
         j += "\"hw4_tier"; j += i; j += "_percent\":"; j += (int)state.hw4_offset_tier_percent[i]; j += ',';
     }
@@ -1020,6 +1189,41 @@ static void ws_event(uint8_t num, WStype_t type,
             Serial.printf("[Web] China Mode: %s\n", enabled ? "ON" : "OFF");
             prefs_save(&saved);
         }
+    } else if (strstr(buf, "\"hw_mode_auto\"")) {
+        if (vptr) {
+            while (*vptr == ' ' || *vptr == ':') vptr++;
+            FSDState saved;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            state_enter();
+            g_state->hw_mode_auto = enabled;
+            if (enabled) {
+                fsd_apply_hw_version(g_state, TeslaHW_Unknown);
+            } else {
+                fsd_apply_hw_version(g_state, g_state->manual_hw_version);
+            }
+            saved = *g_state;
+            state_exit();
+            Serial.printf("[Web] Hardware Mode: %s\n",
+                enabled ? "Auto Detect" : "Manual Override");
+            prefs_save(&saved);
+        }
+    } else if (strstr(buf, "\"manual_hw_version\"")) {
+        if (vptr) {
+            while (*vptr == ' ' || *vptr == ':') vptr++;
+            int val = atoi(vptr);
+            if (val >= (int)TeslaHW_Legacy && val <= (int)TeslaHW_HW4) {
+                FSDState saved;
+                state_enter();
+                g_state->hw_mode_auto = false;
+                g_state->manual_hw_version = (TeslaHWVersion)val;
+                fsd_apply_hw_version(g_state, g_state->manual_hw_version);
+                saved = *g_state;
+                state_exit();
+                const char *names[] = {"Unknown", "Legacy", "HW3", "HW4"};
+                Serial.printf("[Web] Manual Hardware: %s\n", names[val]);
+                prefs_save(&saved);
+            }
+        }
     } else if (strstr(buf, "\"profile_mode_auto\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
@@ -1027,9 +1231,7 @@ static void ws_event(uint8_t num, WStype_t type,
             bool enabled = (strncmp(vptr, "true", 4) == 0);
             state_enter();
             g_state->profile_mode_auto = enabled;
-            if (!enabled) {
-                g_state->speed_profile = g_state->manual_speed_profile;
-            }
+            fsd_apply_hw_version(g_state, g_state->hw_version);
             saved = *g_state;
             state_exit();
             Serial.printf("[Web] Profile Mode: %s\n",
@@ -1042,16 +1244,112 @@ static void ws_event(uint8_t num, WStype_t type,
             int val = atoi(vptr);
             if (val >= 0 && val <= 4) {
                 FSDState saved;
+                bool accepted = false;
                 state_enter();
-                g_state->manual_speed_profile = (uint8_t)val;
-                if (!g_state->profile_mode_auto) {
-                    g_state->speed_profile = val;
+                uint8_t max_profile = (g_state->hw_version == TeslaHW_HW4) ? 4 : 2;
+                if (val <= max_profile) {
+                    g_state->manual_speed_profile = (uint8_t)val;
+                    if (!g_state->profile_mode_auto) {
+                        g_state->speed_profile = val;
+                    }
+                    saved = *g_state;
+                    accepted = true;
                 }
-                saved = *g_state;
                 state_exit();
                 const char *names[] = {"Chill", "Normal", "Hurry", "Max", "Sloth"};
-                Serial.printf("[Web] Manual Profile: %d (%s)\n", val, names[val]);
-                prefs_save(&saved);
+                if (accepted) {
+                    Serial.printf("[Web] Manual Profile: %d (%s)\n", val, names[val]);
+                    prefs_save(&saved);
+                } else {
+                    Serial.printf("[Web] Ignored unsupported profile %d for current HW\n", val);
+                }
+            }
+        }
+    } else if (strstr(buf, "\"hw3_offset_auto\"")) {
+        if (vptr) {
+            while (*vptr == ' ' || *vptr == ':') vptr++;
+            FSDState saved;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            state_enter();
+            g_state->hw3_offset_auto = enabled;
+            if (enabled) {
+                g_state->hw3_offset_active = 0;
+                g_state->hw3_offset_auto_valid = false;
+            } else {
+                g_state->speed_offset = g_state->hw3_offset;
+                g_state->hw3_offset_active = g_state->hw3_offset;
+                g_state->hw3_offset_auto_valid = false;
+            }
+            saved = *g_state;
+            state_exit();
+            Serial.printf("[Web] HW3 Offset Source: %s\n",
+                enabled ? "Auto" : "Manual");
+            prefs_save(&saved);
+        }
+    } else if (strstr(buf, "\"hw3_offset_percent_mode\"")) {
+        if (vptr) {
+            while (*vptr == ' ' || *vptr == ':') vptr++;
+            FSDState saved;
+            bool enabled = (strncmp(vptr, "true", 4) == 0);
+            state_enter();
+            g_state->hw3_offset_auto = false;
+            g_state->hw3_offset_percent_mode = enabled;
+            saved = *g_state;
+            state_exit();
+            Serial.printf("[Web] HW3 Offset Mode: %s\n",
+                enabled ? "Percent" : "Fixed");
+            prefs_save(&saved);
+        }
+    } else if (strstr(buf, "\"hw3_offset\"")) {
+        if (vptr) {
+            while (*vptr == ' ' || *vptr == ':') vptr++;
+            int val = atoi(vptr);
+            if (val < 0) val = 0;
+            if (val > 50) val = 50;
+            FSDState saved;
+            state_enter();
+            g_state->hw3_offset = (uint8_t)val;
+            if (!g_state->hw3_offset_auto) {
+                g_state->speed_offset = val;
+                g_state->hw3_offset_active = (uint8_t)val;
+            }
+            saved = *g_state;
+            state_exit();
+            Serial.printf("[Web] HW3 Speed Offset: %d%%\n", val);
+            prefs_save(&saved);
+        }
+    } else if (strstr(buf, "\"hw3_tier")) {
+        if (vptr) {
+            while (*vptr == ' ' || *vptr == ':') vptr++;
+            int val = atoi(vptr);
+            for (uint8_t i = 0; i < 3; ++i) {
+                char key[28];
+                snprintf(key, sizeof(key), "\"hw3_tier%u_limit\"", i);
+                if (strstr(buf, key)) {
+                    if (val < 0) val = 0;
+                    if (val > 155) val = 155;
+                    FSDState saved;
+                    state_enter();
+                    g_state->hw3_offset_tier_limit[i] = (uint8_t)val;
+                    saved = *g_state;
+                    state_exit();
+                    Serial.printf("[Web] HW3 Offset Tier %u Limit: %d km/h\n", i + 1, val);
+                    prefs_save(&saved);
+                    break;
+                }
+                snprintf(key, sizeof(key), "\"hw3_tier%u_percent\"", i);
+                if (strstr(buf, key)) {
+                    if (val < 0) val = 0;
+                    if (val > 50) val = 50;
+                    FSDState saved;
+                    state_enter();
+                    g_state->hw3_offset_tier_percent[i] = (uint8_t)val;
+                    saved = *g_state;
+                    state_exit();
+                    Serial.printf("[Web] HW3 Offset Tier %u Percent: %d%%\n", i + 1, val);
+                    prefs_save(&saved);
+                    break;
+                }
             }
         }
     } else if (strstr(buf, "\"hw4_offset_percent_mode\"")) {

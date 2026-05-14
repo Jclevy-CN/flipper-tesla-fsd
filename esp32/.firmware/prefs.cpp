@@ -27,26 +27,51 @@ void prefs_load(FSDState *state) {
     state->wifi_hidden = g_prefs.getBool("wsh", false);
 
     state->op_mode = (OpMode)g_prefs.getUChar("mode", (uint8_t)OpMode_ListenOnly);
+    state->hw_mode_auto = g_prefs.getBool("hwauto", true);
+    state->manual_hw_version = (TeslaHWVersion)g_prefs.getUChar("mhw", (uint8_t)TeslaHW_HW3);
+    if (state->manual_hw_version < TeslaHW_Legacy || state->manual_hw_version > TeslaHW_HW4)
+        state->manual_hw_version = TeslaHW_HW3;
+    if (!state->hw_mode_auto)
+        fsd_apply_hw_version(state, state->manual_hw_version);
     state->profile_mode_auto = g_prefs.getBool("pauto", true);
     state->manual_speed_profile = g_prefs.getUChar("mprof", 1);
     if (state->manual_speed_profile > 4) state->manual_speed_profile = 1;
+    state->hw3_offset_auto = g_prefs.getBool("h3auto", true);
+    state->hw3_offset = g_prefs.getUChar("hw3off", 0);
+    if (state->hw3_offset > 50) state->hw3_offset = 50;
+    state->hw3_offset_percent_mode = g_prefs.getBool("h3pct", false);
     state->hw4_offset = g_prefs.getUChar("hw4off", 0);
     if (state->hw4_offset > 50) state->hw4_offset = 50;
     state->hw4_offset_percent_mode = g_prefs.getBool("h4pct", false);
     for (uint8_t i = 0; i < 3; ++i) {
         char key[8];
+        snprintf(key, sizeof(key), "h3l%u", i);
+        state->hw3_offset_tier_limit[i] = g_prefs.getUChar(key, state->hw3_offset_tier_limit[i]);
+        snprintf(key, sizeof(key), "h3p%u", i);
+        state->hw3_offset_tier_percent[i] = g_prefs.getUChar(key, state->hw3_offset_tier_percent[i]);
+        if (state->hw3_offset_tier_percent[i] > 50) state->hw3_offset_tier_percent[i] = 50;
         snprintf(key, sizeof(key), "h4l%u", i);
         state->hw4_offset_tier_limit[i] = g_prefs.getUChar(key, state->hw4_offset_tier_limit[i]);
         snprintf(key, sizeof(key), "h4p%u", i);
         state->hw4_offset_tier_percent[i] = g_prefs.getUChar(key, state->hw4_offset_tier_percent[i]);
         if (state->hw4_offset_tier_percent[i] > 50) state->hw4_offset_tier_percent[i] = 50;
     }
-    if (!state->profile_mode_auto) state->speed_profile = state->manual_speed_profile;
+    if (!state->profile_mode_auto) {
+        uint8_t max_profile = (state->hw_version == TeslaHW_HW4) ? 4 : 2;
+        state->speed_profile = (state->manual_speed_profile > max_profile) ?
+            max_profile : state->manual_speed_profile;
+    }
     
-    Serial.printf("[NVS] Loaded: NAG=%d China=%d Profile=%s/%u HW4Off=%u/%s Sleep=%u SSID=\"%s\" HIDDEN=%d\n",
+    Serial.printf("[NVS] Loaded: NAG=%d China=%d HW=%s/%u Profile=%s/%u HW3Off=%u/%s/%s HW4Off=%u/%s Sleep=%u SSID=\"%s\" HIDDEN=%d\n",
                   state->nag_killer, state->china_mode,
+                  state->hw_mode_auto ? "Auto" : "Manual",
+                  (unsigned)state->manual_hw_version,
                   state->profile_mode_auto ? "Auto" : "Manual",
-                  state->manual_speed_profile, state->hw4_offset,
+                  state->manual_speed_profile,
+                  state->hw3_offset,
+                  state->hw3_offset_auto ? "auto" : "web",
+                  state->hw3_offset_percent_mode ? "pct" : "fixed",
+                  state->hw4_offset,
                   state->hw4_offset_percent_mode ? "pct" : "fixed",
                   state->sleep_idle_ms,
                   state->wifi_ssid, state->wifi_hidden);
@@ -79,22 +104,37 @@ void prefs_save(const FSDState *state) {
     g_prefs.putBool("wsh",    state->wifi_hidden);
 
     g_prefs.putUChar("mode",  (uint8_t)state->op_mode);
+    g_prefs.putBool("hwauto", state->hw_mode_auto);
+    g_prefs.putUChar("mhw",   (uint8_t)state->manual_hw_version);
     g_prefs.putBool("pauto",  state->profile_mode_auto);
     g_prefs.putUChar("mprof", state->manual_speed_profile);
+    g_prefs.putBool("h3auto", state->hw3_offset_auto);
+    g_prefs.putUChar("hw3off", state->hw3_offset);
+    g_prefs.putBool("h3pct",  state->hw3_offset_percent_mode);
     g_prefs.putUChar("hw4off", state->hw4_offset);
     g_prefs.putBool("h4pct",  state->hw4_offset_percent_mode);
     for (uint8_t i = 0; i < 3; ++i) {
         char key[8];
+        snprintf(key, sizeof(key), "h3l%u", i);
+        g_prefs.putUChar(key, state->hw3_offset_tier_limit[i]);
+        snprintf(key, sizeof(key), "h3p%u", i);
+        g_prefs.putUChar(key, state->hw3_offset_tier_percent[i]);
         snprintf(key, sizeof(key), "h4l%u", i);
         g_prefs.putUChar(key, state->hw4_offset_tier_limit[i]);
         snprintf(key, sizeof(key), "h4p%u", i);
         g_prefs.putUChar(key, state->hw4_offset_tier_percent[i]);
     }
     
-    Serial.printf("[NVS] Saved: NAG=%d China=%d Profile=%s/%u HW4Off=%u/%s Sleep=%u SSID=\"%s\" HIDDEN=%d\n",
+    Serial.printf("[NVS] Saved: NAG=%d China=%d HW=%s/%u Profile=%s/%u HW3Off=%u/%s/%s HW4Off=%u/%s Sleep=%u SSID=\"%s\" HIDDEN=%d\n",
                   state->nag_killer, state->china_mode,
+                  state->hw_mode_auto ? "Auto" : "Manual",
+                  (unsigned)state->manual_hw_version,
                   state->profile_mode_auto ? "Auto" : "Manual",
-                  state->manual_speed_profile, state->hw4_offset,
+                  state->manual_speed_profile,
+                  state->hw3_offset,
+                  state->hw3_offset_auto ? "auto" : "web",
+                  state->hw3_offset_percent_mode ? "pct" : "fixed",
+                  state->hw4_offset,
                   state->hw4_offset_percent_mode ? "pct" : "fixed",
                   state->sleep_idle_ms,
                   state->wifi_ssid, state->wifi_hidden);

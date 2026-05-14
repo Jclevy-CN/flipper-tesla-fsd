@@ -40,12 +40,44 @@ static bool is_fsd_selected(const CanFrame *frame, bool force_fsd, bool china_mo
     return (frame->data[4] >> 6) & 0x01;
 }
 
+static uint8_t select_offset_tier(uint16_t limit_kph,
+                                  const uint8_t tier_limit[3],
+                                  const uint8_t tier_percent[3],
+                                  uint8_t max_offset) {
+    if (limit_kph == 0) return 0;
+    uint8_t percent = 0;
+    for (uint8_t i = 0; i < 3; ++i) {
+        if (limit_kph <= tier_limit[i]) {
+            percent = tier_percent[i];
+            break;
+        }
+    }
+    return (percent > max_offset) ? max_offset : percent;
+}
+
+static uint8_t max_speed_profile_for_hw(TeslaHWVersion hw) {
+    return (hw == TeslaHW_HW4) ? 4u : 2u;
+}
+
 // ── State init ────────────────────────────────────────────────────────────────
 
 void fsd_state_init(FSDState *state, TeslaHWVersion hw) {
     memset(state, 0, sizeof(FSDState));
+    state->hw_mode_auto       = true;
+    state->manual_hw_version  = TeslaHW_HW3;
     state->profile_mode_auto    = true;
     state->manual_speed_profile = 1;
+    state->hw3_offset_auto      = true;
+    state->hw3_offset           = 0;
+    state->hw3_offset_percent_mode = false;
+    state->hw3_offset_tier_limit[0]   = 30;
+    state->hw3_offset_tier_limit[1]   = 50;
+    state->hw3_offset_tier_limit[2]   = 100;
+    state->hw3_offset_tier_percent[0] = 50;
+    state->hw3_offset_tier_percent[1] = 30;
+    state->hw3_offset_tier_percent[2] = 10;
+    state->hw3_offset_active    = 0;
+    state->hw3_offset_auto_valid = false;
     state->hw4_offset           = 0;
     state->hw4_offset_percent_mode = false;
     state->hw4_offset_tier_limit[0]   = 30;
@@ -72,9 +104,17 @@ void fsd_state_init(FSDState *state, TeslaHWVersion hw) {
 }
 
 void fsd_apply_hw_version(FSDState *state, TeslaHWVersion hw) {
+    TeslaHWVersion previous_hw = state->hw_version;
     state->hw_version = hw;
+    if (previous_hw != hw) {
+        state->hw3_offset_auto_valid = false;
+        state->hw3_offset_active = 0;
+        state->hw4_offset_active = 0;
+    }
     if (!state->profile_mode_auto) {
-        state->speed_profile = state->manual_speed_profile;
+        uint8_t max_profile = max_speed_profile_for_hw(hw);
+        state->speed_profile = (state->manual_speed_profile > max_profile) ?
+            max_profile : state->manual_speed_profile;
         return;
     }
 
@@ -179,12 +219,25 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
     if (state->hw_version == TeslaHW_HW3) {
         // ── HW3 ──────────────────────────────────────────────────────────────
         if (mux == 0 && state->fsd_enabled) {
-            // Compute speed offset from current speed signal (bits 6:1 of byte 3)
-            int raw    = (int)((frame->data[3] >> 1) & 0x3F) - 30;
-            int offset = raw * 5;
-            if (offset < 0)   offset = 0;
-            if (offset > 100) offset = 100;
-            state->speed_offset = offset;
+            if (state->hw3_offset_auto) {
+                // Compute speed offset from current speed signal (bits 6:1 of byte 3)
+                int raw    = (int)((frame->data[3] >> 1) & 0x3F) - 30;
+                int offset = raw * 5;
+                if (offset < 0)   offset = 0;
+                if (offset > 100) offset = 100;
+                state->speed_offset = offset;
+                state->hw3_offset_auto_valid = true;
+            } else if (state->hw3_offset_percent_mode) {
+                uint16_t limit_kph = (uint16_t)state->das_speed_limit_active * 5u;
+                state->speed_offset = select_offset_tier(
+                    limit_kph,
+                    state->hw3_offset_tier_limit,
+                    state->hw3_offset_tier_percent,
+                    50u);
+            } else {
+                state->speed_offset = (state->hw3_offset > 50u) ? 50 : state->hw3_offset;
+            }
+            state->hw3_offset_active = (uint8_t)state->speed_offset;
 
             // Activate FSD: set bit 46
             set_bit(frame, 46, true);
@@ -202,11 +255,35 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
         }
         if (mux == 2 && state->fsd_enabled) {
             // Write speed offset into bits 7:6 of byte 0 and bits 5:0 of byte 1
-            frame->data[0] &= ~0xC0u;
-            frame->data[1] &= ~0x3Fu;
-            frame->data[0] |= (uint8_t)((state->speed_offset & 0x03) << 6);
-            frame->data[1] |= (uint8_t)(state->speed_offset >> 2);
-            modified = true;
+            bool write_offset = true;
+            if (state->hw3_offset_auto) {
+                write_offset = state->hw3_offset_auto_valid;
+                if (!write_offset) state->hw3_offset_active = 0;
+            } else {
+                if (state->hw3_offset_percent_mode) {
+                    uint16_t limit_kph = (uint16_t)state->das_speed_limit_active * 5u;
+                    if (limit_kph > 0) {
+                        state->speed_offset = select_offset_tier(
+                            limit_kph,
+                            state->hw3_offset_tier_limit,
+                            state->hw3_offset_tier_percent,
+                            50u);
+                    } else {
+                        write_offset = false;
+                        state->hw3_offset_active = 0;
+                    }
+                } else {
+                    state->speed_offset = (state->hw3_offset > 50u) ? 50 : state->hw3_offset;
+                }
+                if (write_offset) state->hw3_offset_active = (uint8_t)state->speed_offset;
+            }
+            if (write_offset) {
+                frame->data[0] &= ~0xC0u;
+                frame->data[1] &= ~0x3Fu;
+                frame->data[0] |= (uint8_t)((state->speed_offset & 0x03) << 6);
+                frame->data[1] |= (uint8_t)(state->speed_offset >> 2);
+                modified = true;
+            }
         }
     } else {
         // ── HW4 ──────────────────────────────────────────────────────────────
@@ -240,14 +317,11 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
                 uint16_t limit_kph = (uint16_t)state->das_speed_limit_active * 5u;
                 if (limit_kph > 0) {
                     write_offset = true;
-                    uint8_t percent = 0;
-                    for (uint8_t i = 0; i < 3; ++i) {
-                        if (limit_kph <= state->hw4_offset_tier_limit[i]) {
-                            percent = state->hw4_offset_tier_percent[i];
-                            break;
-                        }
-                    }
-                    offset = (percent > 50u) ? 50u : percent;
+                    offset = select_offset_tier(
+                        limit_kph,
+                        state->hw4_offset_tier_limit,
+                        state->hw4_offset_tier_percent,
+                        50u);
                     write_offset = (offset > 0);
                 }
             }
