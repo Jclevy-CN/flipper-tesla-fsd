@@ -38,7 +38,7 @@ void prefs_load(FSDState *state) {
     if (state->manual_speed_profile > 4) state->manual_speed_profile = 1;
     state->hw3_offset_auto = g_prefs.getBool("h3auto", true);
     state->hw3_offset = g_prefs.getUChar("hw3off", 0);
-    if (state->hw3_offset > 100) state->hw3_offset = 100;
+    if (state->hw3_offset > 165) state->hw3_offset = 165;
     state->hw3_offset_percent_mode = g_prefs.getBool("h3pct", false);
     state->hw4_offset = g_prefs.getUChar("hw4off", 0);
     if (state->hw4_offset > 50) state->hw4_offset = 50;
@@ -49,7 +49,7 @@ void prefs_load(FSDState *state) {
         state->hw3_offset_tier_limit[i] = g_prefs.getUChar(key, state->hw3_offset_tier_limit[i]);
         snprintf(key, sizeof(key), "h3p%u", i);
         state->hw3_offset_tier_percent[i] = g_prefs.getUChar(key, state->hw3_offset_tier_percent[i]);
-        if (state->hw3_offset_tier_percent[i] > 100) state->hw3_offset_tier_percent[i] = 100;
+        if (state->hw3_offset_tier_percent[i] > 165) state->hw3_offset_tier_percent[i] = 165;
         snprintf(key, sizeof(key), "h4l%u", i);
         state->hw4_offset_tier_limit[i] = g_prefs.getUChar(key, state->hw4_offset_tier_limit[i]);
         snprintf(key, sizeof(key), "h4p%u", i);

@@ -378,9 +378,9 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     </div>
   </div>
   <div class="row" id="hw3OffsetRow">
-    <span class="lbl">Fixed Value</span>
+    <span class="lbl">Base Raw Offset</span>
     <div class="num-ctrl">
-      <input type="number" id="numHw3Offset" min="0" max="100" step="1" onchange="setHw3Offset(this.value)">
+      <input type="number" id="numHw3Offset" min="0" max="33" step="1" onchange="setHw3Offset(this.value)">
       <span id="hw3OffsetUnit"></span>
     </div>
   </div>
@@ -406,7 +406,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
       <div class="num-ctrl"><input type="number" id="tierLimit0" min="0" max="155" step="5" onchange="setOffsetTier(0,'limit',this.value)"><span>km/h</span></div>
     </div>
     <div class="tier-row">
-      <span class="lbl">Offset 1</span>
+      <span class="lbl" id="tierOffsetLabel0">Offset 1</span>
       <span class="tier-mid">+</span>
       <div class="num-ctrl"><input type="number" id="tierPct0" min="0" max="50" step="1" onchange="setOffsetTier(0,'percent',this.value)"><span id="tierUnit0">%</span></div>
     </div>
@@ -416,7 +416,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
       <div class="num-ctrl"><input type="number" id="tierLimit1" min="0" max="155" step="5" onchange="setOffsetTier(1,'limit',this.value)"><span>km/h</span></div>
     </div>
     <div class="tier-row">
-      <span class="lbl">Offset 2</span>
+      <span class="lbl" id="tierOffsetLabel1">Offset 2</span>
       <span class="tier-mid">+</span>
       <div class="num-ctrl"><input type="number" id="tierPct1" min="0" max="50" step="1" onchange="setOffsetTier(1,'percent',this.value)"><span id="tierUnit1">%</span></div>
     </div>
@@ -426,7 +426,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
       <div class="num-ctrl"><input type="number" id="tierLimit2" min="0" max="155" step="5" onchange="setOffsetTier(2,'limit',this.value)"><span>km/h</span></div>
     </div>
     <div class="tier-row">
-      <span class="lbl">Offset 3</span>
+      <span class="lbl" id="tierOffsetLabel2">Offset 3</span>
       <span class="tier-mid">+</span>
       <div class="num-ctrl"><input type="number" id="tierPct2" min="0" max="50" step="1" onchange="setOffsetTier(2,'percent',this.value)"><span id="tierUnit2">%</span></div>
     </div>
@@ -546,6 +546,22 @@ function ring(p){
   b.style.stroke=socCol(p);
 }
 
+function hw3ValueToBase(value){
+  var val=parseInt(value,10);
+  if(isNaN(val))val=0;
+  if(val<0)val=0;
+  if(val>165)val=165;
+  return Math.round(val/5);
+}
+
+function hw3BaseToValue(base){
+  var val=parseInt(base,10);
+  if(isNaN(val))val=0;
+  if(val<0)val=0;
+  if(val>33)val=33;
+  return val*5;
+}
+
 function appendLog(line){
   if(!line || line===lastLog)return;
   lastLog=line;
@@ -653,7 +669,7 @@ function upd(d){
   syncOffsetButtons(isHw3?!!d.hw3_offset_auto:false,isHw3?!!d.hw3_offset_percent_mode:!!d.hw4_offset_percent_mode,isHw3);
   var hw3off=document.getElementById('numHw3Offset');
   if(hw3off && document.activeElement.id!=='numHw3Offset' && d.hw3_offset!==undefined){
-    hw3off.value=d.hw3_offset;
+    hw3off.value=hw3ValueToBase(d.hw3_offset);
   }
   var hw4off=document.getElementById('numHw4Offset');
   if(hw4off && document.activeElement.id!=='numHw4Offset' && d.hw4_offset!==undefined){
@@ -672,13 +688,22 @@ function upd(d){
     var pct=document.getElementById('tierPct'+ti);
     var prefix=isHw3?'hw3_tier':'hw4_tier';
     if(lim && document.activeElement.id!==lim.id && d[prefix+ti+'_limit']!==undefined) lim.value=d[prefix+ti+'_limit'];
-    if(pct && document.activeElement.id!==pct.id && d[prefix+ti+'_percent']!==undefined) pct.value=d[prefix+ti+'_percent'];
-    if(pct) pct.max=isHw3?'100':'50';
+    if(pct && document.activeElement.id!==pct.id && d[prefix+ti+'_percent']!==undefined){
+      pct.value=isHw3?hw3ValueToBase(d[prefix+ti+'_percent']):d[prefix+ti+'_percent'];
+    }
+    if(pct) pct.max=isHw3?'33':'50';
   }
   var dasLimit=document.getElementById('dasLimit');
   if(dasLimit) dasLimit.textContent=(d.das_speed_limit_kph>0)?(d.das_speed_limit_kph+' km/h'):'--';
   var activeOffset=document.getElementById('activeOffset');
-  if(activeOffset) activeOffset.textContent=isHw3?String(d.hw3_offset_active||0):((d.hw4_offset_active||0)+'%');
+  if(activeOffset){
+    if(isHw3){
+      var activeVal=d.hw3_offset_active||0;
+      activeOffset.textContent=hw3ValueToBase(activeVal)+' (Value '+activeVal+')';
+    }else{
+      activeOffset.textContent=(d.hw4_offset_active||0)+'%';
+    }
+  }
   appendLog(d.debug_log);
 
   // CAN stats
@@ -818,7 +843,7 @@ function applyLocalHwSelection(val){
   var autoMode=isHw3&&lastState?!!lastState.hw3_offset_auto:false;
   var percentMode=lastState?(isHw3?!!lastState.hw3_offset_percent_mode:!!lastState.hw4_offset_percent_mode):false;
   document.querySelectorAll('[id^="tierPct"]').forEach(function(pct){
-    pct.max=isHw3?'100':'50';
+    pct.max=isHw3?'33':'50';
   });
   syncOffsetLabels(isHw3);
   syncOffsetButtons(autoMode,percentMode,isHw3);
@@ -882,10 +907,12 @@ function syncOffsetButtons(autoMode,percentMode,isHw3){
 
 function syncOffsetLabels(isHw3){
   var activeLabel=document.getElementById('activeOffsetLabel');
-  if(activeLabel)activeLabel.textContent=isHw3?'Active Value':'Active Offset';
+  if(activeLabel)activeLabel.textContent=isHw3?'Active Base':'Active Offset';
   var hw3Unit=document.getElementById('hw3OffsetUnit');
   if(hw3Unit)hw3Unit.textContent='';
   for(var i=0;i<3;i++){
+    var label=document.getElementById('tierOffsetLabel'+i);
+    if(label)label.textContent=isHw3?('Base Raw '+(i+1)):('Offset '+(i+1));
     var unit=document.getElementById('tierUnit'+i);
     if(unit)unit.textContent=isHw3?'':'%';
   }
@@ -908,10 +935,10 @@ function setHw3Offset(value){
   var val=parseInt(value,10);
   if(isNaN(val))val=0;
   if(val<0)val=0;
-  if(val>100)val=100;
+  if(val>33)val=33;
   var input=document.getElementById('numHw3Offset');
   if(input)input.value=val;
-  cmd('hw3_offset',val);
+  cmd('hw3_offset',hw3BaseToValue(val));
 }
 
 function setHw4Offset(value){
@@ -957,12 +984,13 @@ function setOffsetTier(idx,field,value){
     if(val>155)val=155;
   }else{
     if(val<0)val=0;
-    var maxValue=(offsetHw===2)?100:50;
+    var maxValue=(offsetHw===2)?33:50;
     if(val>maxValue)val=maxValue;
   }
   var input=document.getElementById((field==='limit'?'tierLimit':'tierPct')+idx);
   if(input)input.value=val;
-  cmd((offsetHw===2?'hw3_tier':'hw4_tier')+idx+'_'+field,val);
+  var sendVal=(offsetHw===2&&field!=='limit')?hw3BaseToValue(val):val;
+  cmd((offsetHw===2?'hw3_tier':'hw4_tier')+idx+'_'+field,sendVal);
 }
 
 function conn(){
@@ -1325,7 +1353,7 @@ static void ws_event(uint8_t num, WStype_t type,
             while (*vptr == ' ' || *vptr == ':') vptr++;
             int val = atoi(vptr);
             if (val < 0) val = 0;
-            if (val > 100) val = 100;
+            if (val > 165) val = 165;
             FSDState saved;
             state_enter();
             g_state->hw3_offset = (uint8_t)val;
@@ -1360,7 +1388,7 @@ static void ws_event(uint8_t num, WStype_t type,
                 snprintf(key, sizeof(key), "\"hw3_tier%u_percent\"", i);
                 if (strstr(buf, key)) {
                     if (val < 0) val = 0;
-                    if (val > 100) val = 100;
+                    if (val > 165) val = 165;
                     FSDState saved;
                     state_enter();
                     g_state->hw3_offset_tier_percent[i] = (uint8_t)val;

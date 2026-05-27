@@ -55,6 +55,8 @@ static uint8_t select_offset_tier(uint16_t limit_kph,
     return (value > max_offset) ? max_offset : value;
 }
 
+static const uint8_t HW3_OFFSET_MAX = 165u;
+
 static uint8_t max_speed_profile_for_hw(TeslaHWVersion hw) {
     return (hw == TeslaHW_HW4) ? 4u : 2u;
 }
@@ -224,7 +226,7 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
                 int raw    = (int)((frame->data[3] >> 1) & 0x3F) - 30;
                 int offset = raw * 5;
                 if (offset < 0)   offset = 0;
-                if (offset > 100) offset = 100;
+                if (offset > HW3_OFFSET_MAX) offset = HW3_OFFSET_MAX;
                 state->speed_offset = offset;
                 state->hw3_offset_auto_valid = true;
             } else if (state->hw3_offset_percent_mode) {
@@ -233,9 +235,9 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
                     limit_kph,
                     state->hw3_offset_tier_limit,
                     state->hw3_offset_tier_percent,
-                    100u);
+                    HW3_OFFSET_MAX);
             } else {
-                state->speed_offset = (state->hw3_offset > 100u) ? 100 : state->hw3_offset;
+                state->speed_offset = (state->hw3_offset > HW3_OFFSET_MAX) ? HW3_OFFSET_MAX : state->hw3_offset;
             }
             state->hw3_offset_active = (uint8_t)state->speed_offset;
 
@@ -267,13 +269,13 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
                             limit_kph,
                             state->hw3_offset_tier_limit,
                             state->hw3_offset_tier_percent,
-                            100u);
+                            HW3_OFFSET_MAX);
                     } else {
                         write_offset = false;
                         state->hw3_offset_active = 0;
                     }
                 } else {
-                    state->speed_offset = (state->hw3_offset > 100u) ? 100 : state->hw3_offset;
+                    state->speed_offset = (state->hw3_offset > HW3_OFFSET_MAX) ? HW3_OFFSET_MAX : state->hw3_offset;
                 }
                 if (write_offset) state->hw3_offset_active = (uint8_t)state->speed_offset;
             }
