@@ -43,7 +43,7 @@ void prefs_load(FSDState *state) {
     state->hw4_offset = g_prefs.getUChar("hw4off", 0);
     if (state->hw4_offset > 50) state->hw4_offset = 50;
     state->hw4_offset_percent_mode = g_prefs.getBool("h4pct", false);
-    for (uint8_t i = 0; i < 3; ++i) {
+    for (uint8_t i = 0; i < 4; ++i) {
         char key[8];
         snprintf(key, sizeof(key), "h3l%u", i);
         state->hw3_offset_tier_limit[i] = g_prefs.getUChar(key, state->hw3_offset_tier_limit[i]);
@@ -113,7 +113,7 @@ void prefs_save(const FSDState *state) {
     g_prefs.putBool("h3pct",  state->hw3_offset_percent_mode);
     g_prefs.putUChar("hw4off", state->hw4_offset);
     g_prefs.putBool("h4pct",  state->hw4_offset_percent_mode);
-    for (uint8_t i = 0; i < 3; ++i) {
+    for (uint8_t i = 0; i < 4; ++i) {
         char key[8];
         snprintf(key, sizeof(key), "h3l%u", i);
         g_prefs.putUChar(key, state->hw3_offset_tier_limit[i]);

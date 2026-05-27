@@ -96,14 +96,14 @@ struct FSDState {
     bool           hw3_offset_auto;            // true=Tesla-native/current speed signal, false=Web UI
     uint8_t        hw3_offset;                 // HW3 manual speed offset value (0-165 raw/scaled)
     bool           hw3_offset_percent_mode;    // true=select HW3 offset value from DAS speed limit tiers
-    uint8_t        hw3_offset_tier_limit[3];   // speed limit thresholds in km/h
-    uint8_t        hw3_offset_tier_percent[3]; // HW3 offset value for each threshold (0-165 raw/scaled)
+    uint8_t        hw3_offset_tier_limit[4];   // speed limit thresholds in km/h
+    uint8_t        hw3_offset_tier_percent[4]; // HW3 offset value for each threshold (0-165 raw/scaled)
     uint8_t        hw3_offset_active;          // last HW3 offset value written to mux=2
     bool           hw3_offset_auto_valid;      // true once mux0 has refreshed auto offset
     uint8_t        hw4_offset;                 // HW4 speed offset percent (0-50, 0=disabled)
     bool           hw4_offset_percent_mode;    // true=calculate offset from DAS speed limit
-    uint8_t        hw4_offset_tier_limit[3];   // speed limit thresholds in km/h
-    uint8_t        hw4_offset_tier_percent[3]; // offset percent for each threshold
+    uint8_t        hw4_offset_tier_limit[4];   // speed limit thresholds in km/h
+    uint8_t        hw4_offset_tier_percent[4]; // offset percent for each threshold
     uint8_t        hw4_offset_active;          // last offset percent written to mux=2
     uint8_t        das_fused_speed_lim;        // DAS_fusedSpeedLimit raw value, x5 = km/h
     uint8_t        das_vision_speed_lim;       // DAS_visionOnlySpeedLimit raw value, x5 = km/h

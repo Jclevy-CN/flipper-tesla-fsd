@@ -430,6 +430,16 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
       <span class="tier-mid">+</span>
       <div class="num-ctrl"><input type="number" id="tierPct2" min="0" max="50" step="1" onchange="setOffsetTier(2,'percent',this.value)"><span id="tierUnit2">%</span></div>
     </div>
+    <div class="tier-row">
+      <span class="lbl">Limit 4</span>
+      <span class="tier-mid">&le;</span>
+      <div class="num-ctrl"><input type="number" id="tierLimit3" min="0" max="155" step="5" onchange="setOffsetTier(3,'limit',this.value)"><span>km/h</span></div>
+    </div>
+    <div class="tier-row">
+      <span class="lbl" id="tierOffsetLabel3">Offset 4</span>
+      <span class="tier-mid">+</span>
+      <div class="num-ctrl"><input type="number" id="tierPct3" min="0" max="50" step="1" onchange="setOffsetTier(3,'percent',this.value)"><span id="tierUnit3">%</span></div>
+    </div>
   </div>
 </div>
 
@@ -683,7 +693,7 @@ function upd(d){
   }
   var activeRow=document.getElementById('activeOffsetRow');
   if(activeRow && isHw3) activeRow.style.display='flex';
-  for(var ti=0;ti<3;ti++){
+  for(var ti=0;ti<4;ti++){
     var lim=document.getElementById('tierLimit'+ti);
     var pct=document.getElementById('tierPct'+ti);
     var prefix=isHw3?'hw3_tier':'hw4_tier';
@@ -910,7 +920,7 @@ function syncOffsetLabels(isHw3){
   if(activeLabel)activeLabel.textContent=isHw3?'Active Base':'Active Offset';
   var hw3Unit=document.getElementById('hw3OffsetUnit');
   if(hw3Unit)hw3Unit.textContent='';
-  for(var i=0;i<3;i++){
+  for(var i=0;i<4;i++){
     var label=document.getElementById('tierOffsetLabel'+i);
     if(label)label.textContent=isHw3?('Base Raw '+(i+1)):('Offset '+(i+1));
     var unit=document.getElementById('tierUnit'+i);
@@ -1088,7 +1098,7 @@ static String build_json() {
     j += "\"hw4_offset_percent_mode\":"; j += state.hw4_offset_percent_mode ? "true" : "false"; j += ',';
     j += "\"hw4_offset_active\":"; j += (int)state.hw4_offset_active; j += ',';
     j += "\"das_speed_limit_kph\":"; j += (int)state.das_speed_limit_active * 5; j += ',';
-    for (uint8_t i = 0; i < 3; ++i) {
+    for (uint8_t i = 0; i < 4; ++i) {
         j += "\"hw3_tier"; j += i; j += "_limit\":"; j += (int)state.hw3_offset_tier_limit[i]; j += ',';
         j += "\"hw3_tier"; j += i; j += "_percent\":"; j += (int)state.hw3_offset_tier_percent[i]; j += ',';
         j += "\"hw4_tier"; j += i; j += "_limit\":"; j += (int)state.hw4_offset_tier_limit[i]; j += ',';
@@ -1370,7 +1380,7 @@ static void ws_event(uint8_t num, WStype_t type,
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
             int val = atoi(vptr);
-            for (uint8_t i = 0; i < 3; ++i) {
+            for (uint8_t i = 0; i < 4; ++i) {
                 char key[28];
                 snprintf(key, sizeof(key), "\"hw3_tier%u_limit\"", i);
                 if (strstr(buf, key)) {
@@ -1417,7 +1427,7 @@ static void ws_event(uint8_t num, WStype_t type,
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
             int val = atoi(vptr);
-            for (uint8_t i = 0; i < 3; ++i) {
+            for (uint8_t i = 0; i < 4; ++i) {
                 char key[28];
                 snprintf(key, sizeof(key), "\"hw4_tier%u_limit\"", i);
                 if (strstr(buf, key)) {

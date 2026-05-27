@@ -41,12 +41,12 @@ static bool is_fsd_selected(const CanFrame *frame, bool force_fsd, bool china_mo
 }
 
 static uint8_t select_offset_tier(uint16_t limit_kph,
-                                  const uint8_t tier_limit[3],
-                                  const uint8_t tier_value[3],
+                                  const uint8_t tier_limit[4],
+                                  const uint8_t tier_value[4],
                                   uint8_t max_offset) {
     if (limit_kph == 0) return 0;
     uint8_t value = 0;
-    for (uint8_t i = 0; i < 3; ++i) {
+    for (uint8_t i = 0; i < 4; ++i) {
         if (limit_kph <= tier_limit[i]) {
             value = tier_value[i];
             break;
@@ -72,22 +72,26 @@ void fsd_state_init(FSDState *state, TeslaHWVersion hw) {
     state->hw3_offset_auto      = true;
     state->hw3_offset           = 0;
     state->hw3_offset_percent_mode = false;
-    state->hw3_offset_tier_limit[0]   = 30;
-    state->hw3_offset_tier_limit[1]   = 50;
+    state->hw3_offset_tier_limit[0]   = 40;
+    state->hw3_offset_tier_limit[1]   = 60;
     state->hw3_offset_tier_limit[2]   = 100;
+    state->hw3_offset_tier_limit[3]   = 155;
     state->hw3_offset_tier_percent[0] = 50;
     state->hw3_offset_tier_percent[1] = 30;
     state->hw3_offset_tier_percent[2] = 10;
+    state->hw3_offset_tier_percent[3] = 0;
     state->hw3_offset_active    = 0;
     state->hw3_offset_auto_valid = false;
     state->hw4_offset           = 0;
     state->hw4_offset_percent_mode = false;
-    state->hw4_offset_tier_limit[0]   = 30;
-    state->hw4_offset_tier_limit[1]   = 50;
+    state->hw4_offset_tier_limit[0]   = 40;
+    state->hw4_offset_tier_limit[1]   = 60;
     state->hw4_offset_tier_limit[2]   = 100;
+    state->hw4_offset_tier_limit[3]   = 155;
     state->hw4_offset_tier_percent[0] = 50;
     state->hw4_offset_tier_percent[1] = 30;
     state->hw4_offset_tier_percent[2] = 10;
+    state->hw4_offset_tier_percent[3] = 0;
     fsd_apply_hw_version(state, hw);
     state->op_mode    = OpMode_ListenOnly;  // safe default — never TX on boot
 
