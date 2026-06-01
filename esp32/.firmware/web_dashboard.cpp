@@ -32,6 +32,12 @@ static CanDriver    *g_can       = nullptr;   // for setListenOnly()
 static WebServer        g_http(80);
 static WebSocketsServer g_ws(81);
 
+#if defined(BOARD_LILYGO)
+static constexpr bool k_sd_available = true;
+#else
+static constexpr bool k_sd_available = false;
+#endif
+
 static uint32_t g_start_ms    = 0;
 static uint32_t g_last_rx     = 0;
 static uint32_t g_last_fps_ms = 0;
@@ -259,7 +265,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 </div>
 
 <!-- Battery -->
-<div class="card">
+<div class="card" id="batteryCard" style="display:none">
   <div class="card-head"><div class="icon ic-b">B</div><h2>Battery</h2></div>
   <div class="row">
     <span class="lbl">BMS Status</span>
@@ -310,7 +316,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <span class="lbl">NAG Killer</span>
     <label class="sw"><input type="checkbox" id="swNag" onchange="cmd('nag',this.checked)"><span class="sl2"></span></label>
   </div>
-  <div class="row">
+  <div class="row" id="bmsDisplayRow" style="display:none">
     <span class="lbl">BMS Display</span>
     <label class="sw"><input type="checkbox" id="swBms" onchange="cmd('bms',this.checked)"><span class="sl2"></span></label>
   </div>
@@ -330,7 +336,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <span class="lbl">TLSSC Restore</span>
     <label class="sw"><input type="checkbox" id="swTlssc" onchange="cmd('tlssc_restore',this.checked)"><span class="sl2"></span></label>
   </div>
-  <div class="row">
+  <div class="row" id="dumpRow" style="display:none">
     <span class="lbl">CAN Dump</span>
     <label class="sw"><input type="checkbox" id="swDump" onchange="cmd('dump',this.checked)"><span class="sl2"></span></label>
   </div>
@@ -485,7 +491,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 </div>
 
 <!-- SD Card -->
-<div class="card">
+<div class="card" id="sdCard" style="display:none">
   <div class="card-head"><div class="icon ic-d">S</div><h2>SD Card</h2></div>
   <div class="row">
     <span class="lbl">Dump Status</span>
@@ -600,7 +606,12 @@ function upd(d){
 
   pill('nagSt', d.nag_killer, d.nag_killer?'ON':'OFF');
   pill('canVeh', d.can_vehicle_detected, d.can_vehicle_detected?'Detected':'No CAN Traffic');
-  pill('bmsSt', d.bms && d.bms.seen, (d.bms && d.bms.seen)?'Live':'Waiting Frames');
+  var bmsSeen=!!(d.bms&&d.bms.seen);
+  var batteryCard=document.getElementById('batteryCard');
+  var bmsDisplayRow=document.getElementById('bmsDisplayRow');
+  if(batteryCard)batteryCard.style.display=bmsSeen?'block':'none';
+  if(bmsDisplayRow)bmsDisplayRow.style.display=bmsSeen?'flex':'none';
+  if(bmsSeen)pill('bmsSt',true,'Live');
   var bF=document.getElementById('bmsFrames');
   if(bF) bF.textContent='HV:'+(d.bms_hv_seen||0)+' SOC:'+(d.bms_soc_seen||0)+' TH:'+(d.bms_thermal_seen||0);
 
@@ -618,17 +629,22 @@ function upd(d){
 
   // Switches sync
   if(document.getElementById('swNag')) document.getElementById('swNag').checked=d.nag_killer;
-  if(document.getElementById('swBms')) document.getElementById('swBms').checked=d.bms_output;
+  if(document.getElementById('swBms')) document.getElementById('swBms').checked=bmsSeen&&d.bms_output;
   if(document.getElementById('swFsd')) document.getElementById('swFsd').checked=d.force_fsd;
   if(document.getElementById('swChime')) document.getElementById('swChime').checked=d.suppress_speed_chime;
   if(document.getElementById('swChina')) document.getElementById('swChina').checked=d.china_mode;
   if(document.getElementById('swTlssc')) document.getElementById('swTlssc').checked=d.tlssc_restore;
-  if(document.getElementById('swDump')) document.getElementById('swDump').checked=!!d.can_dump;
+  var sdAvailable=!!d.sd_available;
+  var dumpRow=document.getElementById('dumpRow');
+  var sdCard=document.getElementById('sdCard');
+  if(dumpRow)dumpRow.style.display=sdAvailable?'flex':'none';
+  if(sdCard)sdCard.style.display=sdAvailable?'block':'none';
+  if(document.getElementById('swDump')) document.getElementById('swDump').checked=sdAvailable&&!!d.can_dump;
   
   if(document.activeElement.id!=='numSleep' && document.getElementById('numSleep')) 
     document.getElementById('numSleep').value=Math.floor((d.sleep_ms||0)/1000);
   
-  pill('dumpSt',d.can_dump,d.can_dump?'Recording':'Idle');
+  if(sdAvailable)pill('dumpSt',d.can_dump,d.can_dump?'Recording':'Idle');
 
   // Hardware override
   if(d.hw_mode_auto!==undefined){
@@ -1125,6 +1141,7 @@ static String build_json() {
     j += "\"bms\":";           j += bms;                               j += ',';
     j += "\"uptime_s\":";      j += uptime_s;                          j += ',';
     j += "\"fw_build\":\"";    j += __DATE__;  j += ' '; j += __TIME__; j += "\",";
+    j += "\"sd_available\":";  j += k_sd_available                    ? "true" : "false"; j += ',';
     j += "\"can_dump\":";      j += can_dump_active()                 ? "true" : "false"; j += ',';
     j += "\"sleep_ms\":";     j += state.sleep_idle_ms;            j += ',';
     j += "\"wifi_ssid\":\"";  j += json_escape(state.wifi_ssid);   j += "\",";
@@ -1475,9 +1492,15 @@ static void ws_event(uint8_t num, WStype_t type,
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
             bool want = (strncmp(vptr, "true", 4) == 0);
-            if (want) can_dump_start();
-            else      can_dump_stop();
-            Serial.printf("[Web] CAN Dump: %s\n", want ? "START" : "STOP");
+            if (!k_sd_available) {
+                Serial.println("[Web] CAN Dump unavailable on this board");
+            } else if (want) {
+                can_dump_start();
+                Serial.println("[Web] CAN Dump: START");
+            } else {
+                can_dump_stop();
+                Serial.println("[Web] CAN Dump: STOP");
+            }
         }
     } else if (strstr(buf, "\"sleep\"")) {
         if (vptr) {
