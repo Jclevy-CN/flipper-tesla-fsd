@@ -55,7 +55,7 @@ static uint8_t select_offset_tier(uint16_t limit_kph,
     return (value > max_offset) ? max_offset : value;
 }
 
-static const uint8_t HW3_OFFSET_MAX = 165u;
+static const uint8_t HW3_OFFSET_MAX = 200u;
 
 static uint8_t max_speed_profile_for_hw(TeslaHWVersion hw) {
     return (hw == TeslaHW_HW4) ? 4u : 2u;

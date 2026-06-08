@@ -29,7 +29,7 @@ typedef enum {
 struct FSDState {
     TeslaHWVersion hw_version;
     int            speed_profile;   // 0-4 depending on HW
-    int            speed_offset;    // HW3 only, raw/auto can reach 0-165
+    int            speed_offset;    // HW3 only, raw/auto can reach 0-200
 
     bool           fsd_enabled;     // true when car's UI has FSD selected (mux0)
     bool           nag_suppressed;  // true after first nag-killer echo sent
@@ -94,10 +94,10 @@ struct FSDState {
     bool           profile_mode_auto;          // true=Follow Distance stalk, false=Web UI
     uint8_t        manual_speed_profile;       // manually selected profile in Web UI (0-4)
     bool           hw3_offset_auto;            // true=Tesla-native/current speed signal, false=Web UI
-    uint8_t        hw3_offset;                 // HW3 manual speed offset value (0-165 raw/scaled)
+    uint8_t        hw3_offset;                 // HW3 manual speed offset value (0-200 raw/scaled)
     bool           hw3_offset_percent_mode;    // true=select HW3 offset value from DAS speed limit tiers
     uint8_t        hw3_offset_tier_limit[4];   // speed limit thresholds in km/h
-    uint8_t        hw3_offset_tier_percent[4]; // HW3 offset value for each threshold (0-165 raw/scaled)
+    uint8_t        hw3_offset_tier_percent[4]; // HW3 offset value for each threshold (0-200 raw/scaled)
     uint8_t        hw3_offset_active;          // last HW3 offset value written to mux=2
     bool           hw3_offset_auto_valid;      // true once mux0 has refreshed auto offset
     uint8_t        hw4_offset;                 // HW4 speed offset percent (0-50, 0=disabled)

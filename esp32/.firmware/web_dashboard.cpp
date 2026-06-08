@@ -386,7 +386,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
   <div class="row" id="hw3OffsetRow">
     <span class="lbl">Base Raw Offset</span>
     <div class="num-ctrl">
-      <input type="number" id="numHw3Offset" min="0" max="33" step="1" onchange="setHw3Offset(this.value)">
+      <input type="number" id="numHw3Offset" min="0" max="40" step="1" onchange="setHw3Offset(this.value)">
       <span id="hw3OffsetUnit"></span>
     </div>
   </div>
@@ -566,7 +566,7 @@ function hw3ValueToBase(value){
   var val=parseInt(value,10);
   if(isNaN(val))val=0;
   if(val<0)val=0;
-  if(val>165)val=165;
+  if(val>200)val=200;
   return Math.round(val/5);
 }
 
@@ -574,7 +574,7 @@ function hw3BaseToValue(base){
   var val=parseInt(base,10);
   if(isNaN(val))val=0;
   if(val<0)val=0;
-  if(val>33)val=33;
+  if(val>40)val=40;
   return val*5;
 }
 
@@ -961,7 +961,7 @@ function setHw3Offset(value){
   var val=parseInt(value,10);
   if(isNaN(val))val=0;
   if(val<0)val=0;
-  if(val>33)val=33;
+  if(val>40)val=40;
   var input=document.getElementById('numHw3Offset');
   if(input)input.value=val;
   cmd('hw3_offset',hw3BaseToValue(val));
@@ -1010,7 +1010,7 @@ function setOffsetTier(idx,field,value){
     if(val>155)val=155;
   }else{
     if(val<0)val=0;
-    var maxValue=(offsetHw===2)?33:50;
+    var maxValue=(offsetHw===2)?40:50;
     if(val>maxValue)val=maxValue;
   }
   var input=document.getElementById((field==='limit'?'tierLimit':'tierPct')+idx);
@@ -1380,7 +1380,7 @@ static void ws_event(uint8_t num, WStype_t type,
             while (*vptr == ' ' || *vptr == ':') vptr++;
             int val = atoi(vptr);
             if (val < 0) val = 0;
-            if (val > 165) val = 165;
+            if (val > 200) val = 200;
             FSDState saved;
             state_enter();
             g_state->hw3_offset = (uint8_t)val;
@@ -1415,7 +1415,7 @@ static void ws_event(uint8_t num, WStype_t type,
                 snprintf(key, sizeof(key), "\"hw3_tier%u_percent\"", i);
                 if (strstr(buf, key)) {
                     if (val < 0) val = 0;
-                    if (val > 165) val = 165;
+                    if (val > 200) val = 200;
                     FSDState saved;
                     state_enter();
                     g_state->hw3_offset_tier_percent[i] = (uint8_t)val;
