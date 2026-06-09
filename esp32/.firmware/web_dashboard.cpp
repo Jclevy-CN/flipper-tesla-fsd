@@ -306,6 +306,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <div class="sb"><div class="sv" id="rxMissed">0</div><div class="sl">RX Missed</div></div>
     <div class="sb"><div class="sv" id="busErr">0</div><div class="sl">Bus Errors</div></div>
     <div class="sb"><div class="sv" id="rxOverrun">0</div><div class="sl">RX Overrun</div></div>
+    <div class="sb"><div class="sv" id="twaiRestarts">0</div><div class="sl">TWAI Restarts</div></div>
     <div class="sb"><div class="sv" id="fps">0.0</div><div class="sl">Frames/s</div></div>
   </div>
 </div>
@@ -744,6 +745,7 @@ function upd(d){
   if(document.getElementById('rxMissed')) document.getElementById('rxMissed').textContent=(d.rx_missed||0).toLocaleString();
   if(document.getElementById('busErr')) document.getElementById('busErr').textContent=(d.bus_errors||0).toLocaleString();
   if(document.getElementById('rxOverrun')) document.getElementById('rxOverrun').textContent=(d.rx_overrun||0).toLocaleString();
+  if(document.getElementById('twaiRestarts')) document.getElementById('twaiRestarts').textContent=(d.twai_restarts||0).toLocaleString();
   if(document.getElementById('fps')) document.getElementById('fps').textContent=(d.fps||0.0).toFixed(1);
 
   // Battery
@@ -1145,6 +1147,7 @@ static String build_json() {
     j += "\"rx_missed\":";     j += state.rx_missed_count;          j += ',';
     j += "\"bus_errors\":";    j += state.bus_error_count;          j += ',';
     j += "\"rx_overrun\":";    j += state.rx_overrun_count;         j += ',';
+    j += "\"twai_restarts\":"; j += state.twai_restart_count;       j += ',';
     j += "\"crc_errors\":";    j += state.rx_missed_count + state.bus_error_count + state.rx_overrun_count; j += ',';
     j += "\"fps\":";           j += fps_s;                             j += ',';
     j += "\"bms\":";           j += bms;                               j += ',';
@@ -1197,8 +1200,10 @@ static void ws_event(uint8_t num, WStype_t type,
         }
         saved = *g_state;
         state_exit();
-        if (g_can) g_can->setListenOnly(!active);
-        Serial.println(active ? "[Web] → Active mode" : "[Web] → Listen-Only mode");
+        bool can_ok = !g_can || g_can->setListenOnly(!active);
+        Serial.println(active ?
+            (can_ok ? "[Web] → Active mode" : "[Web] → Active mode FAILED") :
+            (can_ok ? "[Web] → Listen-Only mode" : "[Web] → Listen-Only mode FAILED"));
         prefs_save(&saved);
     } else if (strstr(buf, "\"nag\"")) {
         if (vptr) {

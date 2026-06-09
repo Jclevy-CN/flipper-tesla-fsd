@@ -29,7 +29,10 @@ public:
 
     /** Switch between listen-only and normal TX mode at runtime.
      *  Implementations must reinitialise the hardware as needed. */
-    virtual void setListenOnly(bool enable) = 0;
+    virtual bool setListenOnly(bool enable) = 0;
+
+    /** Restart the CAN controller in the requested mode. */
+    virtual bool restart(bool listen_only) = 0;
 
     virtual ~CanDriver() = default;
 };

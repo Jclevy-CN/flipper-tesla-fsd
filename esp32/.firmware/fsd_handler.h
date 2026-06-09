@@ -55,6 +55,7 @@ struct FSDState {
     uint32_t       rx_missed_count;         // TWAI RX queue missed frames
     uint32_t       bus_error_count;         // CAN controller bus errors
     uint32_t       rx_overrun_count;        // TWAI hardware RX overruns
+    uint32_t       twai_restart_count;      // automatic CAN controller restarts
     uint32_t       rx_count;                // total frames seen (wiring check)
     uint32_t       seen_gtw_car_state;      // 0x318 seen count
     uint32_t       seen_gtw_car_config;     // 0x398 seen count

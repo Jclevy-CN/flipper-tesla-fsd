@@ -87,10 +87,14 @@ public:
         return stats;
     }
 
-    void setListenOnly(bool enable) override {
-        if (listen_only_ == enable) return;
+    bool setListenOnly(bool enable) override {
+        if (listen_only_ == enable) return true;
+        return restart(enable);
+    }
+
+    bool restart(bool listen_only) override {
         stop_and_uninstall();
-        install_and_start(enable);
+        return install_and_start(listen_only);
     }
 };
 
@@ -155,13 +159,15 @@ public:
         return stats;
     }
 
-    void setListenOnly(bool enable) override {
-        if (listen_only_ == enable) return;
+    bool setListenOnly(bool enable) override {
+        if (listen_only_ == enable) return true;
         listen_only_ = enable;
-        if (enable)
-            mcp_.setListenOnlyMode();
-        else
-            mcp_.setNormalMode();
+        MCP2515::ERROR err = enable ? mcp_.setListenOnlyMode() : mcp_.setNormalMode();
+        return err == MCP2515::ERROR_OK;
+    }
+
+    bool restart(bool listen_only) override {
+        return begin(listen_only);
     }
 };
 

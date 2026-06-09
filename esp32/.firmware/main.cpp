@@ -34,6 +34,7 @@ static TaskHandle_t g_can_task_handle = nullptr;
 static CanDriver *g_can   = nullptr;
 static FSDState   g_state = {};
 static portMUX_TYPE g_state_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t g_can_start_ms = 0;
 
 static void state_enter() {
     portENTER_CRITICAL(&g_state_mux);
@@ -104,8 +105,10 @@ static void dispatch_clicks(int n) {
         }
         saved = g_state;
         state_exit();
-        g_can->setListenOnly(!active);
-        Serial.println(active ? "[BTN] → Active mode" : "[BTN] → Listen-Only mode");
+        bool can_ok = g_can->setListenOnly(!active);
+        Serial.println(active ?
+            (can_ok ? "[BTN] → Active mode" : "[BTN] → Active mode FAILED") :
+            (can_ok ? "[BTN] → Listen-Only mode" : "[BTN] → Listen-Only mode FAILED"));
         can_dump_log(active ? "MODE switched to Active — TX enabled" : "MODE switched to Listen-Only — TX disabled");
         prefs_save(&saved);
     } else if (n >= 2) {
@@ -211,6 +214,20 @@ static bool send_can_frame_if_allowed(const CanFrame& frame) {
         return false;
     }
     return send_can_frame(frame);
+}
+
+static bool restart_can_driver_for_state(const FSDState& state, const char *reason) {
+    bool listen_only = (state.op_mode != OpMode_Active);
+    bool ok = (g_can != nullptr) && g_can->restart(listen_only);
+    Serial.printf("[CAN] TWAI restart %s (%s, mode=%s)\n",
+                  ok ? "OK" : "FAILED",
+                  reason,
+                  listen_only ? "Listen-Only" : "Active");
+    can_dump_log("CAN restart %s (%s, mode=%s)",
+                 ok ? "OK" : "FAILED",
+                 reason,
+                 listen_only ? "Listen-Only" : "Active");
+    return ok;
 }
 
 #ifndef ENABLE_HW4_MUX2_DEBUG
@@ -567,6 +584,29 @@ static void can_task(void *param) {
             last_err_ms = now;
         }
 
+        // ── Startup CAN recovery: restart TWAI if no frames arrive after boot ──
+        static uint32_t last_recover_ms = 0;
+        state_enter();
+        uint32_t rx_count = g_state.rx_count;
+        uint32_t twai_restart_count = g_state.twai_restart_count;
+        OpMode op_mode = g_state.op_mode;
+        state_exit();
+        if (rx_count == 0 &&
+            twai_restart_count < TWAI_RECOVER_MAX_ATTEMPTS &&
+            now >= (g_can_start_ms + TWAI_RECOVER_AFTER_MS) &&
+            (now - last_recover_ms) >= TWAI_RECOVER_AFTER_MS) {
+            FSDState recover_state = {};
+            recover_state.op_mode = op_mode;
+            bool ok = restart_can_driver_for_state(recover_state, "no RX after boot");
+            state_enter();
+            g_state.twai_restart_count++;
+            state_exit();
+            last_recover_ms = now;
+            if (!ok) {
+                led_set(LED_RED);
+            }
+        }
+
         // ── Precondition frame injection ──────────────────────────────────────
         static uint32_t last_precond_ms = 0;
         FSDState state = state_snapshot();
@@ -762,10 +802,15 @@ void setup() {
             led_set(LED_OFF);   delay(200);
         }
     }
+    g_can_start_ms = millis();
 
     if (g_state.op_mode == OpMode_Active) {
-        g_can->setListenOnly(false);
-        Serial.println("[CAN] 500 kbps — Active (restored from NVS)");
+        if (g_can->setListenOnly(false)) {
+            Serial.println("[CAN] 500 kbps — Active (restored from NVS)");
+        } else {
+            Serial.println("[CAN] 500 kbps — Active restore FAILED");
+            led_set(LED_RED);
+        }
     } else {
         Serial.println("[CAN] 500 kbps — Listen-Only");
     }
