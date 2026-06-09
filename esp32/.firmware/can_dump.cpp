@@ -1,6 +1,7 @@
 #include "can_dump.h"
 #include "config.h"
 #include <stdarg.h>
+#include <string.h>
 
 // ─────────────────────────────────────────────────────────────────────────────
 #if defined(BOARD_LILYGO)
@@ -11,6 +12,7 @@
 
 #define DUMP_MAX_ENTRIES  1000000UL
 #define DUMP_TIMEOUT_MS   (15UL * 60UL * 1000UL)
+#define DUMP_BUF_SIZE     1024
 
 static SPIClass  g_spi(HSPI);
 static bool      g_sd_ok    = false;
@@ -21,6 +23,14 @@ static File      g_file;
 static File      g_log_file;
 static char      g_dir_path[32];
 static File      g_syslog;          // /debug.log — persistent system log
+static char      g_dump_buf[DUMP_BUF_SIZE];
+static size_t    g_dump_buf_len = 0;
+
+static void flush_dump_buffer() {
+    if (g_dump_buf_len == 0 || !g_file) return;
+    g_file.write((const uint8_t *)g_dump_buf, g_dump_buf_len);
+    g_dump_buf_len = 0;
+}
 
 static void syslog_open() {
     if (!g_sd_ok) return;
@@ -82,6 +92,7 @@ static uint32_t find_next_seq() {
 
 static bool open_new_file() {
     if (g_file) {
+        flush_dump_buffer();
         g_file.flush();
         g_file.close();
     }
@@ -147,6 +158,7 @@ void can_dump_stop() {
     if (!g_active) return;
     g_active = false;
     if (g_file) {
+        flush_dump_buffer();
         g_file.flush();
         g_file.close();
     }
@@ -174,7 +186,16 @@ void can_dump_record(const CanFrame &frame) {
         pos += snprintf(line + pos, sizeof(line) - pos, "%02X", frame.data[i]);
     }
     line[pos++] = '\n';
-    g_file.write((const uint8_t *)line, pos);
+    if (pos > 0) {
+        if ((g_dump_buf_len + (size_t)pos) > sizeof(g_dump_buf))
+            flush_dump_buffer();
+        if ((size_t)pos <= sizeof(g_dump_buf)) {
+            memcpy(g_dump_buf + g_dump_buf_len, line, pos);
+            g_dump_buf_len += (size_t)pos;
+        } else {
+            g_file.write((const uint8_t *)line, pos);
+        }
+    }
 
     g_entries++;
     if (g_entries >= DUMP_MAX_ENTRIES) {
@@ -184,6 +205,11 @@ void can_dump_record(const CanFrame &frame) {
 
 void can_dump_tick(uint32_t now_ms) {
     if (!g_active) return;
+    static uint32_t last_flush_ms = 0;
+    if ((now_ms - last_flush_ms) >= 250u) {
+        flush_dump_buffer();
+        last_flush_ms = now_ms;
+    }
     if ((now_ms - g_start_ms) >= DUMP_TIMEOUT_MS) {
         Serial.println("[SD] 15-min auto-stop");
         can_dump_stop();

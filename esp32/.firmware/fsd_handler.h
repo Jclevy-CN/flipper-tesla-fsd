@@ -52,7 +52,9 @@ struct FSDState {
     uint8_t        ota_raw_state;           // raw GTW_updateInProgress bits [1:0]
     uint8_t        ota_assert_count;        // consecutive "in-progress" samples
     uint8_t        ota_clear_count;         // consecutive "not in-progress" samples
-    uint32_t       crc_err_count;           // CAN bus error counter
+    uint32_t       rx_missed_count;         // TWAI RX queue missed frames
+    uint32_t       bus_error_count;         // CAN controller bus errors
+    uint32_t       rx_overrun_count;        // TWAI hardware RX overruns
     uint32_t       rx_count;                // total frames seen (wiring check)
     uint32_t       seen_gtw_car_state;      // 0x318 seen count
     uint32_t       seen_gtw_car_config;     // 0x398 seen count

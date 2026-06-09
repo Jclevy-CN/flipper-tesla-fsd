@@ -303,7 +303,9 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <div class="sb"><div class="sv" id="txCnt">0</div><div class="sl">Modified</div></div>
     <div class="sb"><div class="sv" id="txSent">0</div><div class="sl">TX Sent</div></div>
     <div class="sb"><div class="sv" id="txFail">0</div><div class="sl">TX Failed</div></div>
-    <div class="sb"><div class="sv" id="crcErr">0</div><div class="sl">CRC Errors</div></div>
+    <div class="sb"><div class="sv" id="rxMissed">0</div><div class="sl">RX Missed</div></div>
+    <div class="sb"><div class="sv" id="busErr">0</div><div class="sl">Bus Errors</div></div>
+    <div class="sb"><div class="sv" id="rxOverrun">0</div><div class="sl">RX Overrun</div></div>
     <div class="sb"><div class="sv" id="fps">0.0</div><div class="sl">Frames/s</div></div>
   </div>
 </div>
@@ -524,9 +526,9 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 </div>
 
 <!-- Debug Log -->
-<div class="card">
+<div class="card" id="debugCard" style="display:none">
   <div class="card-head"><div class="icon ic-d">L</div><h2>Debug Log</h2></div>
-  <div id="debugLog" class="logbox"><span class="log-empty">Waiting for HW4 mux2 frames...</span></div>
+  <div id="debugLog" class="logbox"></div>
 </div>
 
 <div class="foot">Tesla FSD ESP32 &middot; M5Stack ATOM Lite + ATOMIC CAN Base</div>
@@ -586,6 +588,8 @@ function appendLog(line){
   logLines.push(ts+' '+line);
   if(logLines.length>12)logLines.shift();
   var box=document.getElementById('debugLog');
+  var card=document.getElementById('debugCard');
+  if(card)card.style.display='block';
   if(box){
     box.textContent=logLines.join('\n');
     box.scrollTop=box.scrollHeight;
@@ -737,7 +741,9 @@ function upd(d){
   if(document.getElementById('txCnt')) document.getElementById('txCnt').textContent=(d.tx_count||0).toLocaleString();
   if(document.getElementById('txSent')) document.getElementById('txSent').textContent=(d.tx_sent||0).toLocaleString();
   if(document.getElementById('txFail')) document.getElementById('txFail').textContent=(d.tx_failed||0).toLocaleString();
-  if(document.getElementById('crcErr')) document.getElementById('crcErr').textContent=d.crc_errors||0;
+  if(document.getElementById('rxMissed')) document.getElementById('rxMissed').textContent=(d.rx_missed||0).toLocaleString();
+  if(document.getElementById('busErr')) document.getElementById('busErr').textContent=(d.bus_errors||0).toLocaleString();
+  if(document.getElementById('rxOverrun')) document.getElementById('rxOverrun').textContent=(d.rx_overrun||0).toLocaleString();
   if(document.getElementById('fps')) document.getElementById('fps').textContent=(d.fps||0.0).toFixed(1);
 
   // Battery
@@ -1136,7 +1142,10 @@ static String build_json() {
     j += "\"tx_sent\":";       j += state.frames_sent;              j += ',';
     j += "\"tx_failed\":";     j += state.tx_fail_count;            j += ',';
     j += "\"debug_log\":\"";   j += json_escape(state.web_debug_log); j += "\",";
-    j += "\"crc_errors\":";    j += state.crc_err_count;            j += ',';
+    j += "\"rx_missed\":";     j += state.rx_missed_count;          j += ',';
+    j += "\"bus_errors\":";    j += state.bus_error_count;          j += ',';
+    j += "\"rx_overrun\":";    j += state.rx_overrun_count;         j += ',';
+    j += "\"crc_errors\":";    j += state.rx_missed_count + state.bus_error_count + state.rx_overrun_count; j += ',';
     j += "\"fps\":";           j += fps_s;                             j += ',';
     j += "\"bms\":";           j += bms;                               j += ',';
     j += "\"uptime_s\":";      j += uptime_s;                          j += ',';

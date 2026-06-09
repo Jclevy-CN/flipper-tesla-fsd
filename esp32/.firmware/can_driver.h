@@ -2,6 +2,12 @@
 
 #include "fsd_handler.h"  // for CanFrame
 
+struct CanErrorStats {
+    uint32_t rx_missed;
+    uint32_t bus_errors;
+    uint32_t rx_overrun;
+};
+
 // ── Abstract CAN driver ───────────────────────────────────────────────────────
 // Implemented by TwaiDriver (CAN_DRIVER_TWAI) and Mcp2515Driver (CAN_DRIVER_MCP2515).
 // Compile-time selection via platformio.ini build_flags.
@@ -18,8 +24,8 @@ public:
     /** Non-blocking receive.  Fills frame and returns true if a frame was available. */
     virtual bool receive(CanFrame &frame) = 0;
 
-    /** Cumulative bus-error counter (rx_missed + bus_errors). */
-    virtual uint32_t errorCount() = 0;
+    /** Cumulative CAN controller diagnostics. */
+    virtual CanErrorStats errorStats() = 0;
 
     /** Switch between listen-only and normal TX mode at runtime.
      *  Implementations must reinitialise the hardware as needed. */

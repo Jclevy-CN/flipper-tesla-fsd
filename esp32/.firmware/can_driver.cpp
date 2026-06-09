@@ -27,9 +27,9 @@ class TwaiDriver : public CanDriver {
             (gpio_num_t)PIN_CAN_TX,
             (gpio_num_t)PIN_CAN_RX,
             listen_only ? TWAI_MODE_LISTEN_ONLY : TWAI_MODE_NORMAL);
-        // Queue depths: 10 RX, 5 TX — sufficient for polling loop
-        g.rx_queue_len = 10;
-        g.tx_queue_len = 5;
+        // Party CAN can exceed 2k fps; keep enough RX headroom for dashboard/dump work.
+        g.rx_queue_len = 64;
+        g.tx_queue_len = 10;
 
         twai_timing_config_t t = TWAI_TIMING_CONFIG_500KBITS();
         twai_filter_config_t f = TWAI_FILTER_CONFIG_ACCEPT_ALL();
@@ -77,10 +77,14 @@ public:
         return true;
     }
 
-    uint32_t errorCount() override {
+    CanErrorStats errorStats() override {
         twai_status_info_t info;
-        if (twai_get_status_info(&info) != ESP_OK) return 0;
-        return info.rx_missed_count + info.bus_error_count;
+        CanErrorStats stats = {};
+        if (twai_get_status_info(&info) != ESP_OK) return stats;
+        stats.rx_missed = info.rx_missed_count;
+        stats.bus_errors = info.bus_error_count;
+        stats.rx_overrun = info.rx_overrun_count;
+        return stats;
     }
 
     void setListenOnly(bool enable) override {
@@ -145,8 +149,10 @@ public:
         return true;
     }
 
-    uint32_t errorCount() override {
-        return err_count_;
+    CanErrorStats errorStats() override {
+        CanErrorStats stats = {};
+        stats.bus_errors = err_count_;
+        return stats;
     }
 
     void setListenOnly(bool enable) override {

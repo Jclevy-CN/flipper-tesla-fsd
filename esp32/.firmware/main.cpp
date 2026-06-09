@@ -213,6 +213,11 @@ static bool send_can_frame_if_allowed(const CanFrame& frame) {
     return send_can_frame(frame);
 }
 
+#ifndef ENABLE_HW4_MUX2_DEBUG
+#define ENABLE_HW4_MUX2_DEBUG 0
+#endif
+
+#if ENABLE_HW4_MUX2_DEBUG
 static uint8_t decode_hw4_mux2_offset_raw(const CanFrame& frame) {
     return (uint8_t)(frame.data[1] & 0x3Fu);
 }
@@ -291,6 +296,7 @@ static void log_hw4_mux2_debug(const CanFrame& in,
     last_tx_allowed = tx_allowed;
     last_sent = sent;
 }
+#endif
 
 // ── LED refresh ───────────────────────────────────────────────────────────────
 static void update_led() {
@@ -492,8 +498,13 @@ static void process_frame(const CanFrame &frame) {
         bool sent = false;
         if (modified && tx)
             sent = send_can_frame_if_allowed(f);
+#if ENABLE_HW4_MUX2_DEBUG
         if (is_hw4_mux2)
             log_hw4_mux2_debug(frame, f, modified, tx, sent);
+#else
+        (void)is_hw4_mux2;
+        (void)sent;
+#endif
         return;
     }
 }
@@ -544,12 +555,14 @@ static void can_task(void *param) {
             process_frame(frame);
         }
 
-        // ── Periodic error counter refresh (~every 250 ms) ────────────────────
+        // ── Periodic CAN diagnostics refresh (~every 250 ms) ──────────────────
         static uint32_t last_err_ms = 0;
         if ((now - last_err_ms) >= 250u) {
-            uint32_t crc_errors = g_can->errorCount();
+            CanErrorStats stats = g_can->errorStats();
             state_enter();
-            g_state.crc_err_count = crc_errors;
+            g_state.rx_missed_count = stats.rx_missed;
+            g_state.bus_error_count = stats.bus_errors;
+            g_state.rx_overrun_count = stats.rx_overrun;
             state_exit();
             last_err_ms = now;
         }
@@ -592,7 +605,7 @@ static void can_task(void *param) {
                 (state.hw_version == TeslaHW_Legacy)  ? "Legacy" : "?";
             Serial.printf(
                 "[STA] HW:%-6s FSD:%-4s NAG:%-10s OTA:%-3s "
-                "Profile:%d  RX:%lu TX:%lu Err:%lu\n",
+                "Profile:%d  RX:%lu TX:%lu Miss:%lu BusErr:%lu Ovr:%lu\n",
                 hw_str,
                 state.fsd_enabled     ? "ON"         : "wait",
                 state.nag_suppressed  ? "suppressed"  : "active",
@@ -600,7 +613,9 @@ static void can_task(void *param) {
                 state.speed_profile,
                 (unsigned long)state.rx_count,
                 (unsigned long)state.frames_modified,
-                (unsigned long)state.crc_err_count);
+                (unsigned long)state.rx_missed_count,
+                (unsigned long)state.bus_error_count,
+                (unsigned long)state.rx_overrun_count);
             last_status_ms = now;
         }
 
