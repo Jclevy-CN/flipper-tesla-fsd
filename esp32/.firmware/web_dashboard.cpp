@@ -344,10 +344,6 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <label class="sw"><input type="checkbox" id="swDump" onchange="cmd('dump',this.checked)"><span class="sl2"></span></label>
   </div>
   <div class="row">
-    <span class="lbl">Deep Sleep (sec)</span>
-    <input type="number" id="numSleep" min="10" max="3600" style="width:60px;background:var(--card2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;text-align:right" onchange="cmd('sleep',parseInt(this.value)*1000)">
-  </div>
-  <div class="row">
     <span class="lbl">Hardware Source</span>
     <div class="seg-group">
       <button class="seg-btn active" id="btnHwAuto" onclick="setHwAuto(true)">Auto</button>
@@ -645,10 +641,6 @@ function upd(d){
   if(dumpRow)dumpRow.style.display=sdAvailable?'flex':'none';
   if(sdCard)sdCard.style.display=sdAvailable?'block':'none';
   if(document.getElementById('swDump')) document.getElementById('swDump').checked=sdAvailable&&!!d.can_dump;
-  
-  if(document.activeElement.id!=='numSleep' && document.getElementById('numSleep')) 
-    document.getElementById('numSleep').value=Math.floor((d.sleep_ms||0)/1000);
-  
   if(sdAvailable)pill('dumpSt',d.can_dump,d.can_dump?'Recording':'Idle');
 
   // Hardware override
@@ -1155,7 +1147,6 @@ static String build_json() {
     j += "\"fw_build\":\"";    j += __DATE__;  j += ' '; j += __TIME__; j += "\",";
     j += "\"sd_available\":";  j += k_sd_available                    ? "true" : "false"; j += ',';
     j += "\"can_dump\":";      j += can_dump_active()                 ? "true" : "false"; j += ',';
-    j += "\"sleep_ms\":";     j += state.sleep_idle_ms;            j += ',';
     j += "\"wifi_ssid\":\"";  j += json_escape(state.wifi_ssid);   j += "\",";
     j += "\"wifi_pass\":\"***\",";
     j += "\"wifi_hidden\":";  j += state.wifi_hidden               ? "true" : "false"; j += ',';
@@ -1514,20 +1505,6 @@ static void ws_event(uint8_t num, WStype_t type,
             } else {
                 can_dump_stop();
                 Serial.println("[Web] CAN Dump: STOP");
-            }
-        }
-    } else if (strstr(buf, "\"sleep\"")) {
-        if (vptr) {
-            while (*vptr == ' ' || *vptr == ':') vptr++;
-            uint32_t val = (uint32_t)atoi(vptr);
-            if (val >= 10000) { // minimum 10s
-                FSDState saved;
-                state_enter();
-                g_state->sleep_idle_ms = val;
-                saved = *g_state;
-                state_exit();
-                Serial.printf("[Web] Sleep timeout: %u ms\n", val);
-                prefs_save(&saved);
             }
         }
     } else if (strstr(buf, "\"wifi_cfg\"")) {
