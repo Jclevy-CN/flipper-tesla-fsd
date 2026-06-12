@@ -57,6 +57,8 @@ struct FSDState {
     uint32_t       rx_overrun_count;        // TWAI hardware RX overruns
     uint32_t       twai_restart_count;      // automatic CAN controller restarts
     uint32_t       can_stack_free_words;    // CAN task stack high-water mark
+    bool           chip_temp_valid;         // true when chip_temp_c is available
+    float          chip_temp_c;             // ESP32-S3 internal temperature sensor
     uint32_t       rx_count;                // total frames seen (wiring check)
     uint32_t       seen_gtw_car_state;      // 0x318 seen count
     uint32_t       seen_gtw_car_config;     // 0x398 seen count

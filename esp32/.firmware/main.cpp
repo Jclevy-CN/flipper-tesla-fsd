@@ -21,6 +21,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <string.h>
+#if defined(BOARD_WAVESHARE_S3)
+#include "driver/temp_sensor.h"
+#endif
 #include "config.h"
 #include "fsd_handler.h"
 #include "can_driver.h"
@@ -36,6 +39,31 @@ static CanDriver *g_can   = nullptr;
 static FSDState   g_state = {};
 static portMUX_TYPE g_state_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t g_can_start_ms = 0;
+
+#if defined(BOARD_WAVESHARE_S3)
+static bool g_chip_temp_ready = false;
+
+static void chip_temp_init() {
+    temp_sensor_config_t cfg = TSENS_CONFIG_DEFAULT();
+    esp_err_t err = temp_sensor_set_config(cfg);
+    g_chip_temp_ready = (err == ESP_OK);
+    Serial.printf("[TEMP] ESP32-S3 sensor %s\n", g_chip_temp_ready ? "ready" : "unavailable");
+}
+
+static bool chip_temp_read(float *temp_c) {
+    if (!g_chip_temp_ready || temp_c == nullptr) return false;
+    if (temp_sensor_start() != ESP_OK) return false;
+    esp_err_t err = temp_sensor_read_celsius(temp_c);
+    temp_sensor_stop();
+    return err == ESP_OK;
+}
+#else
+static void chip_temp_init() {}
+static bool chip_temp_read(float *temp_c) {
+    (void)temp_c;
+    return false;
+}
+#endif
 
 static void state_enter() {
     portENTER_CRITICAL(&g_state_mux);
@@ -602,6 +630,18 @@ static void can_task(void *param) {
             last_err_ms = now;
         }
 
+        // ── ESP32-S3 chip temperature (~every 3 s, not in frame hot path) ──────
+        static uint32_t last_temp_ms = 0;
+        if ((now - last_temp_ms) >= 3000u) {
+            float temp_c = 0.0f;
+            bool valid = chip_temp_read(&temp_c);
+            state_enter();
+            g_state.chip_temp_valid = valid;
+            if (valid) g_state.chip_temp_c = temp_c;
+            state_exit();
+            last_temp_ms = now;
+        }
+
         // ── Startup CAN recovery: restart TWAI if no frames arrive after boot ──
         static uint32_t last_recover_ms = 0;
         state_enter();
@@ -713,6 +753,7 @@ void setup() {
     Serial.printf("[FSD] Build: %s %s\n", __DATE__, __TIME__);
     esp_reset_reason_t reset_reason = esp_reset_reason();
     Serial.printf("[RST] Reason: %s (%d)\n", reset_reason_name(reset_reason), (int)reset_reason);
+    chip_temp_init();
 
     const esp_partition_t *running = esp_ota_get_running_partition();
     if (running) {

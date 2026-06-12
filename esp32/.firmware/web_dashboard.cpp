@@ -535,6 +535,10 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <span id="resetReason" style="font-size:.8em;color:var(--text2)">--</span>
   </div>
   <div class="row">
+    <span class="lbl">Chip Temp</span>
+    <span id="chipTemp" style="font-size:.8em;color:var(--text2)">--</span>
+  </div>
+  <div class="row">
     <span class="lbl">Free Heap</span>
     <span id="freeHeap" style="font-size:.8em;color:var(--text2)">--</span>
   </div>
@@ -801,6 +805,7 @@ function upd(d){
   if(document.getElementById('fwBuild')) document.getElementById('fwBuild').textContent=d.fw_build;
   if(document.getElementById('uptime')) document.getElementById('uptime').textContent=fmt(d.uptime_s||0);
   if(document.getElementById('resetReason')) document.getElementById('resetReason').textContent=d.reset_reason||'--';
+  if(document.getElementById('chipTemp')) document.getElementById('chipTemp').textContent=d.chip_temp_valid?((d.chip_temp_c||0).toFixed(1)+'\u00b0C'):'N/A';
   if(document.getElementById('freeHeap')) document.getElementById('freeHeap').textContent=kb(d.free_heap);
   if(document.getElementById('minHeap')) document.getElementById('minHeap').textContent=kb(d.min_free_heap);
   if(document.getElementById('webStack')) document.getElementById('webStack').textContent=kb((d.web_stack_free_words||0)*4);
@@ -1232,6 +1237,8 @@ static size_t build_json(char *out, size_t out_len) {
     JAPP("\"uptime_s\":%lu,", (unsigned long)uptime_s);
     JAPP("\"reset_reason\":\"%s\",", reset_reason_name(reset_reason));
     JAPP("\"reset_reason_code\":%d,", (int)reset_reason);
+    JAPP("\"chip_temp_valid\":%s,", state.chip_temp_valid ? "true" : "false");
+    JAPP("\"chip_temp_c\":%.1f,", state.chip_temp_c);
     JAPP("\"free_heap\":%lu,", (unsigned long)esp_get_free_heap_size());
     JAPP("\"min_free_heap\":%lu,", (unsigned long)esp_get_minimum_free_heap_size());
     JAPP("\"web_stack_free_words\":%lu,", (unsigned long)web_stack_free_words);
