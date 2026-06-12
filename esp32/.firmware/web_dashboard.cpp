@@ -326,6 +326,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <div class="sb"><div class="sv" id="busErr">0</div><div class="sl">Bus Errors</div></div>
     <div class="sb"><div class="sv" id="rxOverrun">0</div><div class="sl">RX Overrun</div></div>
     <div class="sb"><div class="sv" id="twaiRestarts">0</div><div class="sl">TWAI Restarts</div></div>
+    <div class="sb"><div class="sv" id="twaiState">--</div><div class="sl">TWAI State</div></div>
     <div class="sb"><div class="sv" id="fps">0.0</div><div class="sl">Frames/s</div></div>
   </div>
 </div>
@@ -577,6 +578,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 <script>
 var ws,rt,busy=0,wifiOnce=false,offsetHw=0,lastState=null;
 var HW=['Unknown','Legacy','HW3','HW4'];
+var TWAI=['Stopped','Running','Bus-Off','Recovering'];
 var CIRC=326.73;
 var logLines=[],lastLog='';
 
@@ -782,6 +784,7 @@ function upd(d){
   if(document.getElementById('busErr')) document.getElementById('busErr').textContent=(d.bus_errors||0).toLocaleString();
   if(document.getElementById('rxOverrun')) document.getElementById('rxOverrun').textContent=(d.rx_overrun||0).toLocaleString();
   if(document.getElementById('twaiRestarts')) document.getElementById('twaiRestarts').textContent=(d.twai_restarts||0).toLocaleString();
+  if(document.getElementById('twaiState')) document.getElementById('twaiState').textContent=TWAI[d.twai_state]||'Unknown';
   if(document.getElementById('fps')) document.getElementById('fps').textContent=(d.fps||0.0).toFixed(1);
 
   // Battery
@@ -1231,6 +1234,7 @@ static size_t build_json(char *out, size_t out_len) {
     JAPP("\"bus_errors\":%lu,", (unsigned long)state.bus_error_count);
     JAPP("\"rx_overrun\":%lu,", (unsigned long)state.rx_overrun_count);
     JAPP("\"twai_restarts\":%lu,", (unsigned long)state.twai_restart_count);
+    JAPP("\"twai_state\":%u,", (unsigned)state.twai_state);
     JAPP("\"crc_errors\":%lu,", (unsigned long)(state.rx_missed_count + state.bus_error_count + state.rx_overrun_count));
     JAPP("\"fps\":%s,", fps_s);
     JAPP("\"bms\":%s,", bms);
@@ -1681,14 +1685,6 @@ static void handle_captive_portal() {
     handle_root();
 }
 
-static void handle_probe_204() {
-    g_http.send(204, "text/plain", "");
-}
-
-static void handle_probe_ok() {
-    g_http.send(200, "text/plain", "Success");
-}
-
 static void handle_probe_redirect() {
     String ip = WiFi.softAPIP().toString();
     g_http.sendHeader("Location", "http://" + ip + "/", true);
@@ -1822,12 +1818,12 @@ void web_dashboard_init(FSDState *state, CanDriver *can, portMUX_TYPE *state_mux
     g_http.on("/sdformat",   HTTP_GET,  handle_sdformat);
     g_http.on("/restart",    HTTP_GET,  handle_restart);
     g_http.on("/update",     HTTP_POST, handle_ota_done, handle_ota_upload);
-    g_http.on("/generate_204", HTTP_GET, handle_probe_204);
-    g_http.on("/gen_204", HTTP_GET, handle_probe_204);
-    g_http.on("/hotspot-detect.html", HTTP_GET, handle_probe_ok);
-    g_http.on("/library/test/success.html", HTTP_GET, handle_probe_ok);
-    g_http.on("/connecttest.txt", HTTP_GET, handle_probe_ok);
-    g_http.on("/success.txt", HTTP_GET, handle_probe_ok);
+    g_http.on("/generate_204", HTTP_GET, handle_probe_redirect);
+    g_http.on("/gen_204", HTTP_GET, handle_probe_redirect);
+    g_http.on("/hotspot-detect.html", HTTP_GET, handle_probe_redirect);
+    g_http.on("/library/test/success.html", HTTP_GET, handle_probe_redirect);
+    g_http.on("/connecttest.txt", HTTP_GET, handle_probe_redirect);
+    g_http.on("/success.txt", HTTP_GET, handle_probe_redirect);
     g_http.on("/redirect", HTTP_GET, handle_probe_redirect);
     g_http.on("/fwlink", HTTP_GET, handle_probe_redirect);
     g_http.onNotFound(handle_captive_portal);

@@ -6,6 +6,7 @@ struct CanErrorStats {
     uint32_t rx_missed;
     uint32_t bus_errors;
     uint32_t rx_overrun;
+    uint8_t  state;
 };
 
 // ── Abstract CAN driver ───────────────────────────────────────────────────────

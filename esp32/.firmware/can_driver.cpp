@@ -84,6 +84,7 @@ public:
         stats.rx_missed = info.rx_missed_count;
         stats.bus_errors = info.bus_error_count;
         stats.rx_overrun = info.rx_overrun_count;
+        stats.state = (uint8_t)info.state;
         return stats;
     }
 

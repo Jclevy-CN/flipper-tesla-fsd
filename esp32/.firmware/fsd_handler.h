@@ -56,6 +56,7 @@ struct FSDState {
     uint32_t       bus_error_count;         // CAN controller bus errors
     uint32_t       rx_overrun_count;        // TWAI hardware RX overruns
     uint32_t       twai_restart_count;      // automatic CAN controller restarts
+    uint8_t        twai_state;              // TWAI_STATE_* value (0=Stopped,1=Running,2=Bus-Off,3=Recovering)
     uint32_t       can_stack_free_words;    // CAN task stack high-water mark
     bool           chip_temp_valid;         // true when chip_temp_c is available
     float          chip_temp_c;             // ESP32-S3 internal temperature sensor

@@ -625,6 +625,7 @@ static void can_task(void *param) {
             g_state.rx_missed_count = stats.rx_missed;
             g_state.bus_error_count = stats.bus_errors;
             g_state.rx_overrun_count = stats.rx_overrun;
+            g_state.twai_state = stats.state;
             g_state.can_stack_free_words = uxTaskGetStackHighWaterMark(nullptr);
             state_exit();
             last_err_ms = now;
@@ -642,27 +643,46 @@ static void can_task(void *param) {
             last_temp_ms = now;
         }
 
-        // ── Startup CAN recovery: restart TWAI if no frames arrive after boot ──
+        // ── Startup CAN recovery: restart TWAI if RX stops advancing ──────────
         static uint32_t last_recover_ms = 0;
+        static uint32_t last_recover_rx_count = 0;
+        static uint8_t startup_rx_ok_checks = 0;
+        static bool startup_recovery_done = false;
         state_enter();
         uint32_t rx_count = g_state.rx_count;
         uint32_t twai_restart_count = g_state.twai_restart_count;
         OpMode op_mode = g_state.op_mode;
         state_exit();
-        if (rx_count == 0 &&
-            twai_restart_count < TWAI_RECOVER_MAX_ATTEMPTS &&
+        if (last_recover_ms == 0) {
+            last_recover_ms = g_can_start_ms;
+            last_recover_rx_count = rx_count;
+        }
+        if (!startup_recovery_done &&
             now >= (g_can_start_ms + TWAI_RECOVER_AFTER_MS) &&
             (now - last_recover_ms) >= TWAI_RECOVER_AFTER_MS) {
-            FSDState recover_state = {};
-            recover_state.op_mode = op_mode;
-            bool ok = restart_can_driver_for_state(recover_state, "no RX after boot");
-            state_enter();
-            g_state.twai_restart_count++;
-            state_exit();
-            last_recover_ms = now;
-            if (!ok) {
-                led_set(LED_RED);
+            if (rx_count == last_recover_rx_count) {
+                if (twai_restart_count < TWAI_RECOVER_MAX_ATTEMPTS) {
+                    FSDState recover_state = {};
+                    recover_state.op_mode = op_mode;
+                    bool ok = restart_can_driver_for_state(recover_state, "RX stalled after boot");
+                    state_enter();
+                    g_state.twai_restart_count++;
+                    state_exit();
+                    if (!ok) {
+                        led_set(LED_RED);
+                    }
+                } else {
+                    startup_recovery_done = true;
+                }
+            } else {
+                if (startup_rx_ok_checks < 3) startup_rx_ok_checks++;
+                if (startup_rx_ok_checks >= 3) {
+                    startup_recovery_done = true;
+                    Serial.println("[CAN] Startup RX checks passed — TWAI auto-recovery disabled");
+                }
             }
+            last_recover_rx_count = rx_count;
+            last_recover_ms = now;
         }
 
         // ── Precondition frame injection ──────────────────────────────────────
