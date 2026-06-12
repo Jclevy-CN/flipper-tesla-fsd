@@ -21,8 +21,10 @@
 #include <Arduino.h>
 #include <Update.h>
 #include <esp_ota_ops.h>
+#include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <stdarg.h>
 
 // ── Module state ──────────────────────────────────────────────────────────────
 static FSDState     *g_state     = nullptr;   // shared with main
@@ -44,6 +46,7 @@ static uint32_t g_last_fps_ms = 0;
 static uint32_t g_last_can_seen_ms = 0;
 static float    g_fps         = 0.0f;
 static TaskHandle_t g_web_task_handle = nullptr;
+static char     g_json_buf[4096];
 
 #define CAN_VEHICLE_ALIVE_MS 3000u
 
@@ -63,6 +66,22 @@ static bool state_copy(FSDState *out) {
     *out = *g_state;
     state_exit();
     return true;
+}
+
+static const char *reset_reason_name(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_POWERON: return "Power-on";
+        case ESP_RST_EXT: return "External";
+        case ESP_RST_SW: return "Software";
+        case ESP_RST_PANIC: return "Panic";
+        case ESP_RST_INT_WDT: return "Interrupt WDT";
+        case ESP_RST_TASK_WDT: return "Task WDT";
+        case ESP_RST_WDT: return "Other WDT";
+        case ESP_RST_DEEPSLEEP: return "Deep Sleep";
+        case ESP_RST_BROWNOUT: return "Brownout";
+        case ESP_RST_SDIO: return "SDIO";
+        default: return "Unknown";
+    }
 }
 
 // ── Embedded HTML/CSS/JS ──────────────────────────────────────────────────────
@@ -512,6 +531,26 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <span id="uptime" style="font-variant-numeric:tabular-nums">--</span>
   </div>
   <div class="row">
+    <span class="lbl">Reset Reason</span>
+    <span id="resetReason" style="font-size:.8em;color:var(--text2)">--</span>
+  </div>
+  <div class="row">
+    <span class="lbl">Free Heap</span>
+    <span id="freeHeap" style="font-size:.8em;color:var(--text2)">--</span>
+  </div>
+  <div class="row">
+    <span class="lbl">Min Heap</span>
+    <span id="minHeap" style="font-size:.8em;color:var(--text2)">--</span>
+  </div>
+  <div class="row">
+    <span class="lbl">Web Stack</span>
+    <span id="webStack" style="font-size:.8em;color:var(--text2)">--</span>
+  </div>
+  <div class="row">
+    <span class="lbl">CAN Stack</span>
+    <span id="canStack" style="font-size:.8em;color:var(--text2)">--</span>
+  </div>
+  <div class="row">
     <span class="lbl">WiFi Clients</span>
     <span id="wifiCl">--</span>
   </div>
@@ -549,6 +588,7 @@ function fmt(s){
   var h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=s%60;
   return h+':'+(m<10?'0':'')+m+':'+(sc<10?'0':'')+sc;
 }
+function kb(v){return ((v||0)/1024).toFixed(1)+' KB';}
 function socCol(p){return p>60?'var(--accent)':p>30?'var(--yellow)':'var(--red)';}
 function pill(id,on,txt,warnClass){
   var e=document.getElementById(id);
@@ -760,6 +800,11 @@ function upd(d){
   // Device
   if(document.getElementById('fwBuild')) document.getElementById('fwBuild').textContent=d.fw_build;
   if(document.getElementById('uptime')) document.getElementById('uptime').textContent=fmt(d.uptime_s||0);
+  if(document.getElementById('resetReason')) document.getElementById('resetReason').textContent=d.reset_reason||'--';
+  if(document.getElementById('freeHeap')) document.getElementById('freeHeap').textContent=kb(d.free_heap);
+  if(document.getElementById('minHeap')) document.getElementById('minHeap').textContent=kb(d.min_free_heap);
+  if(document.getElementById('webStack')) document.getElementById('webStack').textContent=kb((d.web_stack_free_words||0)*4);
+  if(document.getElementById('canStack')) document.getElementById('canStack').textContent=kb((d.can_stack_free_words||0)*4);
   if(document.getElementById('wifiCl')) document.getElementById('wifiCl').textContent=d.wifi_clients||0;
   var partEl=document.getElementById('otaPartInfo');
   if(partEl && d.ota_partition){
@@ -1041,20 +1086,55 @@ conn();
 )rawliteral";
 
 // ── JSON helpers ──────────────────────────────────────────────────────────────
-static String json_escape(const char *s) {
-    String out;
-    for (; *s; ++s) {
-        if (*s == '"')       out += "\\\"";
-        else if (*s == '\\') out += "\\\\";
-        else                 out += *s;
+static bool json_appendf(char *&p, char *end, const char *fmt, ...) {
+    if (p >= end) return false;
+    va_list args;
+    va_start(args, fmt);
+    int n = vsnprintf(p, (size_t)(end - p), fmt, args);
+    va_end(args);
+    if (n < 0) {
+        if (p < end) *p = '\0';
+        return false;
     }
-    return out;
+    if (n >= (end - p)) {
+        p = end - 1;
+        *p = '\0';
+        return false;
+    }
+    p += n;
+    return true;
+}
+
+static bool json_append_escaped(char *&p, char *end, const char *s) {
+    if (s == nullptr) return true;
+    for (; *s; ++s) {
+        const char *esc = nullptr;
+        if (*s == '"') esc = "\\\"";
+        else if (*s == '\\') esc = "\\\\";
+
+        if (esc != nullptr) {
+            while (*esc) {
+                if (p >= end - 1) { *p = '\0'; return false; }
+                *p++ = *esc++;
+            }
+        } else {
+            if (p >= end - 1) { *p = '\0'; return false; }
+            *p++ = *s;
+        }
+    }
+    if (p < end) *p = '\0';
+    return true;
 }
 
 // ── JSON builder ──────────────────────────────────────────────────────────────
-static String build_json() {
+static size_t build_json(char *out, size_t out_len) {
+    if (out == nullptr || out_len == 0) return 0;
+
     FSDState state;
-    if (!state_copy(&state)) return "{}";
+    if (!state_copy(&state)) {
+        snprintf(out, out_len, "{}");
+        return strlen(out);
+    }
 
     uint32_t uptime_s = (millis() - g_start_ms) / 1000;
     bool can_vehicle_detected = false;
@@ -1094,66 +1174,81 @@ static String build_json() {
     // fps as fixed-point string
     char fps_s[12];
     snprintf(fps_s, sizeof(fps_s), "%.1f", g_fps);
+    esp_reset_reason_t reset_reason = esp_reset_reason();
+    uint32_t web_stack_free_words =
+        (g_web_task_handle != nullptr) ? uxTaskGetStackHighWaterMark(g_web_task_handle) : 0;
 
-    String j;
-    j.reserve(1408);
-    j  = "{";
-    j += "\"fsd_enabled\":";   j += state.fsd_enabled             ? "true" : "false"; j += ',';
-    j += "\"op_mode\":";       j += (int)state.op_mode;            j += ',';
-    j += "\"hw_version\":";    j += (int)state.hw_version;         j += ',';
-    j += "\"hw_mode_auto\":";  j += state.hw_mode_auto             ? "true" : "false"; j += ',';
-    j += "\"manual_hw_version\":"; j += (int)state.manual_hw_version; j += ',';
-    j += "\"speed_profile\":"; j += (int)state.speed_profile;      j += ',';
-    j += "\"profile_mode_auto\":"; j += state.profile_mode_auto    ? "true" : "false"; j += ',';
-    j += "\"manual_speed_profile\":"; j += (int)state.manual_speed_profile; j += ',';
-    j += "\"hw3_offset_auto\":"; j += state.hw3_offset_auto        ? "true" : "false"; j += ',';
-    j += "\"hw3_offset\":";    j += (int)state.hw3_offset;          j += ',';
-    j += "\"hw3_offset_percent_mode\":"; j += state.hw3_offset_percent_mode ? "true" : "false"; j += ',';
-    j += "\"hw3_offset_active\":"; j += (int)state.hw3_offset_active; j += ',';
-    j += "\"hw4_offset\":";    j += (int)state.hw4_offset;          j += ',';
-    j += "\"hw4_offset_percent_mode\":"; j += state.hw4_offset_percent_mode ? "true" : "false"; j += ',';
-    j += "\"hw4_offset_active\":"; j += (int)state.hw4_offset_active; j += ',';
-    j += "\"das_speed_limit_kph\":"; j += (int)state.das_speed_limit_active * 5; j += ',';
+    char *p = out;
+    char *end = out + out_len;
+#define JAPP(...) json_appendf(p, end, __VA_ARGS__)
+    JAPP("{");
+    JAPP("\"fsd_enabled\":%s,", state.fsd_enabled ? "true" : "false");
+    JAPP("\"op_mode\":%d,", (int)state.op_mode);
+    JAPP("\"hw_version\":%d,", (int)state.hw_version);
+    JAPP("\"hw_mode_auto\":%s,", state.hw_mode_auto ? "true" : "false");
+    JAPP("\"manual_hw_version\":%d,", (int)state.manual_hw_version);
+    JAPP("\"speed_profile\":%d,", (int)state.speed_profile);
+    JAPP("\"profile_mode_auto\":%s,", state.profile_mode_auto ? "true" : "false");
+    JAPP("\"manual_speed_profile\":%d,", (int)state.manual_speed_profile);
+    JAPP("\"hw3_offset_auto\":%s,", state.hw3_offset_auto ? "true" : "false");
+    JAPP("\"hw3_offset\":%d,", (int)state.hw3_offset);
+    JAPP("\"hw3_offset_percent_mode\":%s,", state.hw3_offset_percent_mode ? "true" : "false");
+    JAPP("\"hw3_offset_active\":%d,", (int)state.hw3_offset_active);
+    JAPP("\"hw4_offset\":%d,", (int)state.hw4_offset);
+    JAPP("\"hw4_offset_percent_mode\":%s,", state.hw4_offset_percent_mode ? "true" : "false");
+    JAPP("\"hw4_offset_active\":%d,", (int)state.hw4_offset_active);
+    JAPP("\"das_speed_limit_kph\":%d,", (int)state.das_speed_limit_active * 5);
     for (uint8_t i = 0; i < 4; ++i) {
-        j += "\"hw3_tier"; j += i; j += "_limit\":"; j += (int)state.hw3_offset_tier_limit[i]; j += ',';
-        j += "\"hw3_tier"; j += i; j += "_percent\":"; j += (int)state.hw3_offset_tier_percent[i]; j += ',';
-        j += "\"hw4_tier"; j += i; j += "_limit\":"; j += (int)state.hw4_offset_tier_limit[i]; j += ',';
-        j += "\"hw4_tier"; j += i; j += "_percent\":"; j += (int)state.hw4_offset_tier_percent[i]; j += ',';
+        JAPP("\"hw3_tier%u_limit\":%d,", i, (int)state.hw3_offset_tier_limit[i]);
+        JAPP("\"hw3_tier%u_percent\":%d,", i, (int)state.hw3_offset_tier_percent[i]);
+        JAPP("\"hw4_tier%u_limit\":%d,", i, (int)state.hw4_offset_tier_limit[i]);
+        JAPP("\"hw4_tier%u_percent\":%d,", i, (int)state.hw4_offset_tier_percent[i]);
     }
-    j += "\"ota\":";           j += state.tesla_ota_in_progress    ? "true" : "false"; j += ',';
-    j += "\"nag_killer\":";    j += state.nag_killer               ? "true" : "false"; j += ',';
-    j += "\"bms_output\":";    j += state.bms_output               ? "true" : "false"; j += ',';
-    j += "\"force_fsd\":";     j += state.force_fsd                ? "true" : "false"; j += ',';
-    j += "\"suppress_speed_chime\":"; j += state.suppress_speed_chime ? "true" : "false"; j += ',';
-    j += "\"china_mode\":";    j += state.china_mode               ? "true" : "false"; j += ',';
-    j += "\"tlssc_restore\":"; j += state.tlssc_restore            ? "true" : "false"; j += ',';
-    j += "\"can_vehicle_detected\":"; j += can_vehicle_detected       ? "true" : "false"; j += ',';
-    j += "\"bms_hv_seen\":";   j += state.seen_bms_hv;              j += ',';
-    j += "\"bms_soc_seen\":";  j += state.seen_bms_soc;             j += ',';
-    j += "\"bms_thermal_seen\":"; j += state.seen_bms_thermal;       j += ',';
-    j += "\"rx_count\":";      j += state.rx_count;                 j += ',';
-    j += "\"tx_count\":";      j += state.frames_modified;          j += ',';
-    j += "\"tx_sent\":";       j += state.frames_sent;              j += ',';
-    j += "\"tx_failed\":";     j += state.tx_fail_count;            j += ',';
-    j += "\"debug_log\":\"";   j += json_escape(state.web_debug_log); j += "\",";
-    j += "\"rx_missed\":";     j += state.rx_missed_count;          j += ',';
-    j += "\"bus_errors\":";    j += state.bus_error_count;          j += ',';
-    j += "\"rx_overrun\":";    j += state.rx_overrun_count;         j += ',';
-    j += "\"twai_restarts\":"; j += state.twai_restart_count;       j += ',';
-    j += "\"crc_errors\":";    j += state.rx_missed_count + state.bus_error_count + state.rx_overrun_count; j += ',';
-    j += "\"fps\":";           j += fps_s;                             j += ',';
-    j += "\"bms\":";           j += bms;                               j += ',';
-    j += "\"uptime_s\":";      j += uptime_s;                          j += ',';
-    j += "\"fw_build\":\"";    j += __DATE__;  j += ' '; j += __TIME__; j += "\",";
-    j += "\"sd_available\":";  j += k_sd_available                    ? "true" : "false"; j += ',';
-    j += "\"can_dump\":";      j += can_dump_active()                 ? "true" : "false"; j += ',';
-    j += "\"wifi_ssid\":\"";  j += json_escape(state.wifi_ssid);   j += "\",";
-    j += "\"wifi_pass\":\"***\",";
-    j += "\"wifi_hidden\":";  j += state.wifi_hidden               ? "true" : "false"; j += ',';
-    j += "\"wifi_clients\":";  j += (int)WiFi.softAPgetStationNum();   j += ',';
-    j += "\"ota_partition\":"; j += ota_part;
-    j += '}';
-    return j;
+    JAPP("\"ota\":%s,", state.tesla_ota_in_progress ? "true" : "false");
+    JAPP("\"nag_killer\":%s,", state.nag_killer ? "true" : "false");
+    JAPP("\"bms_output\":%s,", state.bms_output ? "true" : "false");
+    JAPP("\"force_fsd\":%s,", state.force_fsd ? "true" : "false");
+    JAPP("\"suppress_speed_chime\":%s,", state.suppress_speed_chime ? "true" : "false");
+    JAPP("\"china_mode\":%s,", state.china_mode ? "true" : "false");
+    JAPP("\"tlssc_restore\":%s,", state.tlssc_restore ? "true" : "false");
+    JAPP("\"can_vehicle_detected\":%s,", can_vehicle_detected ? "true" : "false");
+    JAPP("\"bms_hv_seen\":%lu,", (unsigned long)state.seen_bms_hv);
+    JAPP("\"bms_soc_seen\":%lu,", (unsigned long)state.seen_bms_soc);
+    JAPP("\"bms_thermal_seen\":%lu,", (unsigned long)state.seen_bms_thermal);
+    JAPP("\"rx_count\":%lu,", (unsigned long)state.rx_count);
+    JAPP("\"tx_count\":%lu,", (unsigned long)state.frames_modified);
+    JAPP("\"tx_sent\":%lu,", (unsigned long)state.frames_sent);
+    JAPP("\"tx_failed\":%lu,", (unsigned long)state.tx_fail_count);
+    JAPP("\"debug_log\":\"");
+    json_append_escaped(p, end, state.web_debug_log);
+    JAPP("\",");
+    JAPP("\"rx_missed\":%lu,", (unsigned long)state.rx_missed_count);
+    JAPP("\"bus_errors\":%lu,", (unsigned long)state.bus_error_count);
+    JAPP("\"rx_overrun\":%lu,", (unsigned long)state.rx_overrun_count);
+    JAPP("\"twai_restarts\":%lu,", (unsigned long)state.twai_restart_count);
+    JAPP("\"crc_errors\":%lu,", (unsigned long)(state.rx_missed_count + state.bus_error_count + state.rx_overrun_count));
+    JAPP("\"fps\":%s,", fps_s);
+    JAPP("\"bms\":%s,", bms);
+    JAPP("\"uptime_s\":%lu,", (unsigned long)uptime_s);
+    JAPP("\"reset_reason\":\"%s\",", reset_reason_name(reset_reason));
+    JAPP("\"reset_reason_code\":%d,", (int)reset_reason);
+    JAPP("\"free_heap\":%lu,", (unsigned long)esp_get_free_heap_size());
+    JAPP("\"min_free_heap\":%lu,", (unsigned long)esp_get_minimum_free_heap_size());
+    JAPP("\"web_stack_free_words\":%lu,", (unsigned long)web_stack_free_words);
+    JAPP("\"can_stack_free_words\":%lu,", (unsigned long)state.can_stack_free_words);
+    JAPP("\"fw_build\":\"%s %s\",", __DATE__, __TIME__);
+    JAPP("\"sd_available\":%s,", k_sd_available ? "true" : "false");
+    JAPP("\"can_dump\":%s,", can_dump_active() ? "true" : "false");
+    JAPP("\"wifi_ssid\":\"");
+    json_append_escaped(p, end, state.wifi_ssid);
+    JAPP("\",");
+    JAPP("\"wifi_pass\":\"***\",");
+    JAPP("\"wifi_hidden\":%s,", state.wifi_hidden ? "true" : "false");
+    JAPP("\"wifi_clients\":%d,", (int)WiFi.softAPgetStationNum());
+    JAPP("\"ota_partition\":%s", ota_part);
+    JAPP("}");
+#undef JAPP
+    return strlen(out);
 }
 
 // ── WebSocket event handler ───────────────────────────────────────────────────
@@ -1161,9 +1256,8 @@ static void ws_event(uint8_t num, WStype_t type,
                      uint8_t *payload, size_t length)
 {
     if (type == WStype_CONNECTED) {
-        // Push current state immediately on connect
-        String json = build_json();
-        g_ws.sendTXT(num, json.c_str(), json.length());
+        // Avoid a large synchronous send during the connect handshake.
+        // The normal 1 Hz broadcast will deliver state within one tick.
         return;
     }
 
@@ -1565,7 +1659,8 @@ static void handle_root() {
 
 static void handle_status() {
     if (g_state == nullptr) { g_http.send(503, "application/json", "{}"); return; }
-    g_http.send(200, "application/json", build_json());
+    build_json(g_json_buf, sizeof(g_json_buf));
+    g_http.send(200, "application/json", g_json_buf);
 }
 
 static void handle_captive_portal() {
@@ -1577,6 +1672,20 @@ static void handle_captive_portal() {
         return;
     }
     handle_root();
+}
+
+static void handle_probe_204() {
+    g_http.send(204, "text/plain", "");
+}
+
+static void handle_probe_ok() {
+    g_http.send(200, "text/plain", "Success");
+}
+
+static void handle_probe_redirect() {
+    String ip = WiFi.softAPIP().toString();
+    g_http.sendHeader("Location", "http://" + ip + "/", true);
+    g_http.send(302, "text/plain", "");
 }
 
 static void handle_sdformat() {
@@ -1706,14 +1815,14 @@ void web_dashboard_init(FSDState *state, CanDriver *can, portMUX_TYPE *state_mux
     g_http.on("/sdformat",   HTTP_GET,  handle_sdformat);
     g_http.on("/restart",    HTTP_GET,  handle_restart);
     g_http.on("/update",     HTTP_POST, handle_ota_done, handle_ota_upload);
-    g_http.on("/generate_204", HTTP_GET, handle_captive_portal);
-    g_http.on("/gen_204", HTTP_GET, handle_captive_portal);
-    g_http.on("/hotspot-detect.html", HTTP_GET, handle_captive_portal);
-    g_http.on("/library/test/success.html", HTTP_GET, handle_captive_portal);
-    g_http.on("/connecttest.txt", HTTP_GET, handle_captive_portal);
-    g_http.on("/redirect", HTTP_GET, handle_captive_portal);
-    g_http.on("/success.txt", HTTP_GET, handle_captive_portal);
-    g_http.on("/fwlink", HTTP_GET, handle_captive_portal);
+    g_http.on("/generate_204", HTTP_GET, handle_probe_204);
+    g_http.on("/gen_204", HTTP_GET, handle_probe_204);
+    g_http.on("/hotspot-detect.html", HTTP_GET, handle_probe_ok);
+    g_http.on("/library/test/success.html", HTTP_GET, handle_probe_ok);
+    g_http.on("/connecttest.txt", HTTP_GET, handle_probe_ok);
+    g_http.on("/success.txt", HTTP_GET, handle_probe_ok);
+    g_http.on("/redirect", HTTP_GET, handle_probe_redirect);
+    g_http.on("/fwlink", HTTP_GET, handle_probe_redirect);
     g_http.onNotFound(handle_captive_portal);
     g_http.begin();
 
@@ -1724,7 +1833,7 @@ void web_dashboard_init(FSDState *state, CanDriver *can, portMUX_TYPE *state_mux
         BaseType_t web_task_ok = xTaskCreatePinnedToCore(
             web_server_task,
             "WebServer",
-            8192,
+            12288,
             nullptr,
             1,
             &g_web_task_handle,
@@ -1765,8 +1874,11 @@ static void web_server_task(void *param) {
                 g_last_rx    = rx;
                 g_last_fps_ms = now;
 
-                String json = build_json();
-                g_ws.broadcastTXT(json.c_str(), json.length());
+                if (g_ws.connectedClients(false) > 0) {
+                    size_t len = build_json(g_json_buf, sizeof(g_json_buf));
+                    g_ws.broadcastTXT(g_json_buf, len);
+                    taskYIELD();
+                }
             }
         }
 

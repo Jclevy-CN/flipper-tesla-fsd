@@ -16,6 +16,7 @@
 
 #include <Arduino.h>
 #include <esp_sleep.h>
+#include <esp_system.h>
 #include <esp_ota_ops.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -50,6 +51,22 @@ static FSDState state_snapshot() {
     s = g_state;
     state_exit();
     return s;
+}
+
+static const char *reset_reason_name(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_POWERON: return "Power-on";
+        case ESP_RST_EXT: return "External";
+        case ESP_RST_SW: return "Software";
+        case ESP_RST_PANIC: return "Panic";
+        case ESP_RST_INT_WDT: return "Interrupt WDT";
+        case ESP_RST_TASK_WDT: return "Task WDT";
+        case ESP_RST_WDT: return "Other WDT";
+        case ESP_RST_DEEPSLEEP: return "Deep Sleep";
+        case ESP_RST_BROWNOUT: return "Brownout";
+        case ESP_RST_SDIO: return "SDIO";
+        default: return "Unknown";
+    }
 }
 
 static void apply_detected_hw(TeslaHWVersion hw, const char *reason) {
@@ -580,6 +597,7 @@ static void can_task(void *param) {
             g_state.rx_missed_count = stats.rx_missed;
             g_state.bus_error_count = stats.bus_errors;
             g_state.rx_overrun_count = stats.rx_overrun;
+            g_state.can_stack_free_words = uxTaskGetStackHighWaterMark(nullptr);
             state_exit();
             last_err_ms = now;
         }
@@ -693,6 +711,8 @@ void setup() {
     Serial.println(" Tesla FSD Unlock — ESP32   ");
     Serial.println("============================");
     Serial.printf("[FSD] Build: %s %s\n", __DATE__, __TIME__);
+    esp_reset_reason_t reset_reason = esp_reset_reason();
+    Serial.printf("[RST] Reason: %s (%d)\n", reset_reason_name(reset_reason), (int)reset_reason);
 
     const esp_partition_t *running = esp_ota_get_running_partition();
     if (running) {
