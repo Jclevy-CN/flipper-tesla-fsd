@@ -617,6 +617,14 @@ static void can_task(void *param) {
             process_frame(frame);
         }
 
+        // Recover a bus-off TWAI controller so RX/TX resume without a manual
+        // mode toggle or device restart.
+        if (g_can->serviceHealth()) {
+            state_enter();
+            g_state.twai_restart_count++;
+            state_exit();
+        }
+
         // ── Periodic CAN diagnostics refresh (~every 250 ms) ──────────────────
         static uint32_t last_err_ms = 0;
         if ((now - last_err_ms) >= 250u) {

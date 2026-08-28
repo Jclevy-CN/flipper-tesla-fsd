@@ -28,6 +28,10 @@ public:
     /** Cumulative CAN controller diagnostics. */
     virtual CanErrorStats errorStats() = 0;
 
+    /** Service controller health and recover from bus-off when supported.
+     *  Returns true when a recovery completed and the controller restarted. */
+    virtual bool serviceHealth() = 0;
+
     /** Switch between listen-only and normal TX mode at runtime.
      *  Implementations must reinitialise the hardware as needed. */
     virtual bool setListenOnly(bool enable) = 0;

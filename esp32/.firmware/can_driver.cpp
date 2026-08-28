@@ -21,6 +21,7 @@
 class TwaiDriver : public CanDriver {
     bool     listen_only_ = false;
     bool     installed_   = false;
+    bool     recovering_  = false;
 
     bool install_and_start(bool listen_only) {
         twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(
@@ -41,6 +42,7 @@ class TwaiDriver : public CanDriver {
         }
         installed_    = true;
         listen_only_  = listen_only;
+        recovering_   = false;
         return true;
     }
 
@@ -49,6 +51,7 @@ class TwaiDriver : public CanDriver {
         twai_stop();
         twai_driver_uninstall();
         installed_ = false;
+        recovering_ = false;
     }
 
 public:
@@ -86,6 +89,27 @@ public:
         stats.rx_overrun = info.rx_overrun_count;
         stats.state = (uint8_t)info.state;
         return stats;
+    }
+
+    bool serviceHealth() override {
+        if (!installed_) return false;
+
+        twai_status_info_t info;
+        if (twai_get_status_info(&info) != ESP_OK) return false;
+
+        if (info.state == TWAI_STATE_BUS_OFF && !recovering_) {
+            if (twai_initiate_recovery() == ESP_OK) {
+                recovering_ = true;
+                Serial.println("[CAN] Bus-off detected — initiating recovery");
+            }
+        } else if (recovering_ && info.state == TWAI_STATE_STOPPED) {
+            if (twai_start() == ESP_OK) {
+                recovering_ = false;
+                Serial.println("[CAN] Bus recovered — restarted");
+                return true;
+            }
+        }
+        return false;
     }
 
     bool setListenOnly(bool enable) override {
@@ -158,6 +182,10 @@ public:
         CanErrorStats stats = {};
         stats.bus_errors = err_count_;
         return stats;
+    }
+
+    bool serviceHealth() override {
+        return false;
     }
 
     bool setListenOnly(bool enable) override {
