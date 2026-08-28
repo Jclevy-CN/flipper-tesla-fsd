@@ -9,6 +9,12 @@ struct CanErrorStats {
     uint8_t  state;
 };
 
+enum class CanModeResult : uint8_t {
+    Switched,
+    SwitchFailedRolledBack,
+    SwitchFailedDriverDown
+};
+
 // ── Abstract CAN driver ───────────────────────────────────────────────────────
 // Implemented by TwaiDriver (CAN_DRIVER_TWAI) and Mcp2515Driver (CAN_DRIVER_MCP2515).
 // Compile-time selection via platformio.ini build_flags.
@@ -34,7 +40,7 @@ public:
 
     /** Switch between listen-only and normal TX mode at runtime.
      *  Implementations must reinitialise the hardware as needed. */
-    virtual bool setListenOnly(bool enable) = 0;
+    virtual CanModeResult setListenOnly(bool enable) = 0;
 
     /** Restart the CAN controller in the requested mode. */
     virtual bool restart(bool listen_only) = 0;

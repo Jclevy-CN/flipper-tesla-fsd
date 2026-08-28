@@ -74,11 +74,24 @@ static bool chip_temp_read(float *temp_c) {
 static bool apply_can_mode(OpMode requested_mode, uint32_t request_id,
                            const char *source) {
     bool listen_only = requested_mode != OpMode_Active;
-    bool ok = g_can != nullptr && g_can->setListenOnly(listen_only);
+    CanModeResult result = g_can != nullptr
+        ? g_can->setListenOnly(listen_only)
+        : CanModeResult::SwitchFailedDriverDown;
+    bool ok = result == CanModeResult::Switched;
     FSDState saved;
 
     state_enter();
-    if (ok) g_state.op_mode = requested_mode;
+    if (ok) {
+        g_state.op_mode = requested_mode;
+        g_state.can_driver_available = true;
+    } else if (result == CanModeResult::SwitchFailedDriverDown) {
+        // Fail closed: the software TX gate must never report Active while the
+        // CAN driver is unavailable.
+        g_state.op_mode = OpMode_ListenOnly;
+        g_state.can_driver_available = false;
+    } else {
+        g_state.can_driver_available = true;
+    }
     g_state.can_mode_switch_pending = false;
     g_state.can_mode_switch_failed = !ok;
     g_state.can_mode_switch_request_id = request_id;
@@ -86,8 +99,11 @@ static bool apply_can_mode(OpMode requested_mode, uint32_t request_id,
     state_exit();
 
     const char *mode = requested_mode == OpMode_Active ? "Active" : "Listen-Only";
-    Serial.printf("[%s] → %s mode %s\n", source, mode, ok ? "OK" : "FAILED");
-    can_dump_log("MODE %s -> %s (%s)", source, mode, ok ? "OK" : "FAILED");
+    const char *result_text = ok ? "OK" :
+        (result == CanModeResult::SwitchFailedRolledBack ? "FAILED, rolled back" :
+         "FAILED, driver down");
+    Serial.printf("[%s] → %s mode %s\n", source, mode, result_text);
+    can_dump_log("MODE %s -> %s (%s)", source, mode, result_text);
     if (ok) prefs_save(&saved);
     return ok;
 }
@@ -277,6 +293,11 @@ static bool send_can_frame_if_allowed(const CanFrame& frame) {
 static bool restart_can_driver_for_state(const FSDState& state, const char *reason) {
     bool listen_only = (state.op_mode != OpMode_Active);
     bool ok = (g_can != nullptr) && g_can->restart(listen_only);
+    state_enter();
+    g_state.can_driver_available = ok;
+    g_state.can_mode_switch_failed = !ok;
+    if (!ok) g_state.op_mode = OpMode_ListenOnly;
+    state_exit();
     Serial.printf("[CAN] TWAI restart %s (%s, mode=%s)\n",
                   ok ? "OK" : "FAILED",
                   reason,
@@ -462,8 +483,11 @@ static void process_frame(const CanFrame &frame) {
     FSDState state = state_snapshot();
     bool tx = fsd_can_transmit(&state);
 
-    // NAG killer — build echo and send before the real frame propagates (0x370)
+    // NAG killer — do not build the echo or mutate NAG accounting while TX is
+    // blocked by Listen-Only mode, OTA protection, or another transmit gate.
     if (frame.id == CAN_ID_EPAS_STATUS) {
+        if (!tx) return;
+
         CanFrame echo;
         state_enter();
         bool fired = fsd_handle_nag_killer(&g_state, &frame, &echo);
@@ -472,9 +496,9 @@ static void process_frame(const CanFrame &frame) {
             uint8_t lvl     = (frame.data[4] >> 6) & 0x03;
             uint8_t cnt_in  = frame.data[6] & 0x0F;
             uint8_t cnt_out = echo.data[6] & 0x0F;
-            can_dump_log("NAG 0x370 hands_off lvl=%u cnt=%u->%u %s",
-                         lvl, cnt_in, cnt_out, tx ? "TX echo" : "listen-only no-TX");
-            if (tx) send_can_frame_if_allowed(echo);
+            can_dump_log("NAG 0x370 hands_off lvl=%u cnt=%u->%u TX echo",
+                         lvl, cnt_in, cnt_out);
+            send_can_frame_if_allowed(echo);
         }
         return;
     }
@@ -911,15 +935,21 @@ void setup() {
             led_set(LED_OFF);   delay(200);
         }
     }
+    g_state.can_driver_available = true;
     g_can_start_ms = millis();
 
     if (g_state.op_mode == OpMode_Active) {
-        if (g_can->setListenOnly(false)) {
+        CanModeResult mode_result = g_can->setListenOnly(false);
+        if (mode_result == CanModeResult::Switched) {
             Serial.println("[CAN] 500 kbps — Active (restored from NVS)");
         } else {
-            Serial.println("[CAN] 500 kbps — Active restore FAILED");
+            bool driver_available = mode_result == CanModeResult::SwitchFailedRolledBack;
+            Serial.println(driver_available
+                ? "[CAN] 500 kbps — Active restore FAILED, rolled back to Listen-Only"
+                : "[CAN] 500 kbps — Active restore FAILED, driver unavailable");
             g_state.op_mode = OpMode_ListenOnly;
             g_state.can_mode_switch_failed = true;
+            g_state.can_driver_available = driver_available;
             led_set(LED_RED);
         }
     } else {

@@ -647,6 +647,8 @@ function upd(d){
   pill('fsdSt', d.fsd_enabled, d.fsd_enabled?'Active':'Waiting');
   if(d.can_mode_switch_pending){
     pill('opMode',false,'Switching…');
+  }else if(!d.can_driver_available){
+    pill('opMode',false,'Driver Unavailable');
   }else if(d.can_mode_switch_failed){
     pill('opMode',false,'Switch Failed');
   }else{
@@ -1209,6 +1211,7 @@ static size_t build_json(char *out, size_t out_len) {
     JAPP("\"can_mode_switch_pending\":%s,", state.can_mode_switch_pending ? "true" : "false");
     JAPP("\"can_mode_switch_failed\":%s,", state.can_mode_switch_failed ? "true" : "false");
     JAPP("\"can_mode_switch_request_id\":%lu,", (unsigned long)state.can_mode_switch_request_id);
+    JAPP("\"can_driver_available\":%s,", state.can_driver_available ? "true" : "false");
     JAPP("\"hw_version\":%d,", (int)state.hw_version);
     JAPP("\"hw_mode_auto\":%s,", state.hw_mode_auto ? "true" : "false");
     JAPP("\"manual_hw_version\":%d,", (int)state.manual_hw_version);

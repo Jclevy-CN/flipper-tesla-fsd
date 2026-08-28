@@ -112,15 +112,17 @@ public:
         return false;
     }
 
-    bool setListenOnly(bool enable) override {
-        if (listen_only_ == enable) return true;
+    CanModeResult setListenOnly(bool enable) override {
+        if (installed_ && listen_only_ == enable) return CanModeResult::Switched;
         bool previous_mode = listen_only_;
         stop_and_uninstall();
-        if (install_and_start(enable)) return true;
+        if (install_and_start(enable)) return CanModeResult::Switched;
 
         // Preserve the last known-good mode when the requested switch fails.
-        install_and_start(previous_mode);
-        return false;
+        if (install_and_start(previous_mode)) {
+            return CanModeResult::SwitchFailedRolledBack;
+        }
+        return CanModeResult::SwitchFailedDriverDown;
     }
 
     bool restart(bool listen_only) override {
@@ -142,12 +144,14 @@ CanDriver *can_driver_create() {
 class Mcp2515Driver : public CanDriver {
     MCP2515  mcp_;
     bool     listen_only_  = false;
+    bool     ready_        = false;
     uint32_t err_count_    = 0;
 
 public:
     Mcp2515Driver() : mcp_(PIN_MCP_CS) {}
 
     bool begin(bool listen_only) override {
+        ready_ = false;
         SPI.begin(PIN_MCP_SCK, PIN_MCP_MISO, PIN_MCP_MOSI, PIN_MCP_CS);
         SPI.setFrequency(8000000);
 
@@ -158,12 +162,14 @@ public:
         MCP2515::ERROR err = listen_only
             ? mcp_.setListenOnlyMode()
             : mcp_.setNormalMode();
+        if (err != MCP2515::ERROR_OK) return false;
         listen_only_ = listen_only;
-        return err == MCP2515::ERROR_OK;
+        ready_ = true;
+        return true;
     }
 
     bool send(const CanFrame &frame) override {
-        if (listen_only_) return false;
+        if (!ready_ || listen_only_) return false;
         struct can_frame f;
         f.can_id  = frame.id;
         f.can_dlc = frame.dlc;
@@ -194,12 +200,18 @@ public:
         return false;
     }
 
-    bool setListenOnly(bool enable) override {
-        if (listen_only_ == enable) return true;
+    CanModeResult setListenOnly(bool enable) override {
+        if (ready_ && listen_only_ == enable) return CanModeResult::Switched;
+        if (!ready_) {
+            return begin(enable) ? CanModeResult::Switched
+                                 : CanModeResult::SwitchFailedDriverDown;
+        }
         MCP2515::ERROR err = enable ? mcp_.setListenOnlyMode() : mcp_.setNormalMode();
-        if (err != MCP2515::ERROR_OK) return false;
+        if (err != MCP2515::ERROR_OK) {
+            return CanModeResult::SwitchFailedRolledBack;
+        }
         listen_only_ = enable;
-        return true;
+        return CanModeResult::Switched;
     }
 
     bool restart(bool listen_only) override {

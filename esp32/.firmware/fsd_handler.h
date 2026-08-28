@@ -51,6 +51,7 @@ struct FSDState {
     bool           can_mode_switch_pending;
     bool           can_mode_switch_failed;
     uint32_t       can_mode_switch_request_id;
+    bool           can_driver_available;
     bool           tesla_ota_in_progress;   // pause TX during OTA
     uint8_t        ota_raw_state;           // raw GTW_updateInProgress bits [1:0]
     uint8_t        ota_assert_count;        // consecutive "in-progress" samples
