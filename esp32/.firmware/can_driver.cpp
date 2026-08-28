@@ -114,7 +114,13 @@ public:
 
     bool setListenOnly(bool enable) override {
         if (listen_only_ == enable) return true;
-        return restart(enable);
+        bool previous_mode = listen_only_;
+        stop_and_uninstall();
+        if (install_and_start(enable)) return true;
+
+        // Preserve the last known-good mode when the requested switch fails.
+        install_and_start(previous_mode);
+        return false;
     }
 
     bool restart(bool listen_only) override {
@@ -190,9 +196,10 @@ public:
 
     bool setListenOnly(bool enable) override {
         if (listen_only_ == enable) return true;
-        listen_only_ = enable;
         MCP2515::ERROR err = enable ? mcp_.setListenOnlyMode() : mcp_.setNormalMode();
-        return err == MCP2515::ERROR_OK;
+        if (err != MCP2515::ERROR_OK) return false;
+        listen_only_ = enable;
+        return true;
     }
 
     bool restart(bool listen_only) override {

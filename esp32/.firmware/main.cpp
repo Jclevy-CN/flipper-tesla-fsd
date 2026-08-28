@@ -19,6 +19,7 @@
 #include <esp_system.h>
 #include <esp_ota_ops.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 #include <freertos/task.h>
 #include <string.h>
 #if defined(BOARD_WAVESHARE_S3)
@@ -27,6 +28,7 @@
 #include "config.h"
 #include "fsd_handler.h"
 #include "can_driver.h"
+#include "can_command.h"
 #include "led.h"
 #include "wifi_manager.h"
 #include "web_dashboard.h"
@@ -35,10 +37,14 @@
 
 // ── Globals ───────────────────────────────────────────────────────────────────
 static TaskHandle_t g_can_task_handle = nullptr;
+static QueueHandle_t g_can_command_queue = nullptr;
 static CanDriver *g_can   = nullptr;
 static FSDState   g_state = {};
 static portMUX_TYPE g_state_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t g_can_start_ms = 0;
+
+static void state_enter();
+static void state_exit();
 
 #if defined(BOARD_WAVESHARE_S3)
 static bool g_chip_temp_ready = false;
@@ -64,6 +70,27 @@ static bool chip_temp_read(float *temp_c) {
     return false;
 }
 #endif
+
+static bool apply_can_mode(OpMode requested_mode, uint32_t request_id,
+                           const char *source) {
+    bool listen_only = requested_mode != OpMode_Active;
+    bool ok = g_can != nullptr && g_can->setListenOnly(listen_only);
+    FSDState saved;
+
+    state_enter();
+    if (ok) g_state.op_mode = requested_mode;
+    g_state.can_mode_switch_pending = false;
+    g_state.can_mode_switch_failed = !ok;
+    g_state.can_mode_switch_request_id = request_id;
+    saved = g_state;
+    state_exit();
+
+    const char *mode = requested_mode == OpMode_Active ? "Active" : "Listen-Only";
+    Serial.printf("[%s] → %s mode %s\n", source, mode, ok ? "OK" : "FAILED");
+    can_dump_log("MODE %s -> %s (%s)", source, mode, ok ? "OK" : "FAILED");
+    if (ok) prefs_save(&saved);
+    return ok;
+}
 
 static void state_enter() {
     portENTER_CRITICAL(&g_state_mux);
@@ -138,24 +165,10 @@ static bool     g_sleep_warned   = false;
 static void dispatch_clicks(int n) {
     if (n == 1) {
         // Toggle Listen-Only ↔ Active
-        FSDState saved;
-        bool active;
-        state_enter();
-        if (g_state.op_mode == OpMode_ListenOnly) {
-            g_state.op_mode = OpMode_Active;
-            active = true;
-        } else {
-            g_state.op_mode = OpMode_ListenOnly;
-            active = false;
-        }
-        saved = g_state;
-        state_exit();
-        bool can_ok = g_can->setListenOnly(!active);
-        Serial.println(active ?
-            (can_ok ? "[BTN] → Active mode" : "[BTN] → Active mode FAILED") :
-            (can_ok ? "[BTN] → Listen-Only mode" : "[BTN] → Listen-Only mode FAILED"));
-        can_dump_log(active ? "MODE switched to Active — TX enabled" : "MODE switched to Listen-Only — TX disabled");
-        prefs_save(&saved);
+        FSDState state = state_snapshot();
+        OpMode requested_mode = state.op_mode == OpMode_ListenOnly
+            ? OpMode_Active : OpMode_ListenOnly;
+        apply_can_mode(requested_mode, state.can_mode_switch_request_id, "BTN");
     } else if (n >= 2) {
         // Toggle BMS serial output
         FSDState saved;
@@ -604,6 +617,13 @@ static void can_task(void *param) {
     while (true) {
         uint32_t now = millis();
 
+        CanCommand command;
+        while (xQueueReceive(g_can_command_queue, &command, 0) == pdTRUE) {
+            if (command.type == CanCommandType::SetMode) {
+                apply_can_mode(command.requested_mode, command.request_id, "Web");
+            }
+        }
+
         if (g_factory_reset_window && now >= FACTORY_RESET_WINDOW_MS) {
             g_factory_reset_window = false;
             Serial.println("[BTN] Factory reset window closed");
@@ -898,10 +918,19 @@ void setup() {
             Serial.println("[CAN] 500 kbps — Active (restored from NVS)");
         } else {
             Serial.println("[CAN] 500 kbps — Active restore FAILED");
+            g_state.op_mode = OpMode_ListenOnly;
+            g_state.can_mode_switch_failed = true;
             led_set(LED_RED);
         }
     } else {
         Serial.println("[CAN] 500 kbps — Listen-Only");
+    }
+
+    g_can_command_queue = xQueueCreate(4, sizeof(CanCommand));
+    if (g_can_command_queue == nullptr) {
+        Serial.println("[ERR] CAN command queue creation FAILED");
+        led_set(LED_RED);
+        while (true) delay(1000);
     }
     Serial.println("[BTN] Single click : toggle Listen-Only / Active");
     Serial.println("[BTN] Long press 3s: toggle NAG Killer");
@@ -910,7 +939,7 @@ void setup() {
 
     // ── WiFi AP + Web dashboard (non-fatal if WiFi fails) ─────────────────────
     if (wifi_ap_init(&g_state)) {
-        web_dashboard_init(&g_state, g_can, &g_state_mux);
+        web_dashboard_init(&g_state, g_can_command_queue, &g_state_mux);
     }
 
     // ── Create CAN task pinned to Core 1 ──────────────────────────────────────

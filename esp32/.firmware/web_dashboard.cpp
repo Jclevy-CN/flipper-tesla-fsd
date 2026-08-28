@@ -12,6 +12,7 @@
  */
 
 #include "web_dashboard.h"
+#include "can_command.h"
 #include "can_dump.h"
 #include "prefs.h"
 #include "wifi_manager.h"
@@ -29,7 +30,8 @@
 // ── Module state ──────────────────────────────────────────────────────────────
 static FSDState     *g_state     = nullptr;   // shared with main
 static portMUX_TYPE *g_state_mux = nullptr;   // owned by main
-static CanDriver    *g_can       = nullptr;   // for setListenOnly()
+static QueueHandle_t g_can_command_queue = nullptr;
+static uint32_t      g_can_request_id = 0;
 
 static WebServer        g_http(80);
 static WebSocketsServer g_ws(81);
@@ -643,7 +645,13 @@ function upd(d){
   if(!d || Date.now() < busy) return;
   // Status
   pill('fsdSt', d.fsd_enabled, d.fsd_enabled?'Active':'Waiting');
-  pill('opMode', d.op_mode===1, d.op_mode===1?'Active':'Listen-Only');
+  if(d.can_mode_switch_pending){
+    pill('opMode',false,'Switching…');
+  }else if(d.can_mode_switch_failed){
+    pill('opMode',false,'Switch Failed');
+  }else{
+    pill('opMode',d.op_mode===1,d.op_mode===1?'Active':'Listen-Only');
+  }
 
   var hwEl=document.getElementById('hwVer');
   if(hwEl){
@@ -670,7 +678,8 @@ function upd(d){
   var act=d.op_mode===1;
   var btn=document.getElementById('btnMode');
   if(btn){
-    btn.textContent=act?'STOP FSD  \u2192  Listen-Only':'ACTIVATE FSD  \u2192  Active';
+    btn.disabled=!!d.can_mode_switch_pending;
+    btn.textContent=d.can_mode_switch_pending?'SWITCHING…':(act?'STOP FSD  \u2192  Listen-Only':'ACTIVATE FSD  \u2192  Active');
     btn.className='btn-main '+(act?'btn-stop':'btn-act');
   }
 
@@ -882,7 +891,12 @@ function cmd(c,v){
     busy = Date.now() + 3000;
   }
 }
-function toggleMode(){ cmd('mode',null); }
+function toggleMode(){
+  if(!lastState||lastState.can_mode_switch_pending)return;
+  cmd('mode',lastState.op_mode===1?0:1);
+  var btn=document.getElementById('btnMode');
+  if(btn){btn.disabled=true;btn.textContent='SWITCHING…';}
+}
 
 function setHwAuto(isAuto){
   var hwAuto=document.getElementById('btnHwAuto');
@@ -1192,6 +1206,9 @@ static size_t build_json(char *out, size_t out_len) {
     JAPP("{");
     JAPP("\"fsd_enabled\":%s,", state.fsd_enabled ? "true" : "false");
     JAPP("\"op_mode\":%d,", (int)state.op_mode);
+    JAPP("\"can_mode_switch_pending\":%s,", state.can_mode_switch_pending ? "true" : "false");
+    JAPP("\"can_mode_switch_failed\":%s,", state.can_mode_switch_failed ? "true" : "false");
+    JAPP("\"can_mode_switch_request_id\":%lu,", (unsigned long)state.can_mode_switch_request_id);
     JAPP("\"hw_version\":%d,", (int)state.hw_version);
     JAPP("\"hw_mode_auto\":%s,", state.hw_mode_auto ? "true" : "false");
     JAPP("\"manual_hw_version\":%d,", (int)state.manual_hw_version);
@@ -1284,23 +1301,37 @@ static void ws_event(uint8_t num, WStype_t type,
     if (vptr) vptr = strstr(vptr, ":") + 1;
 
     if (strstr(buf, "\"mode\"")) {
-        FSDState saved;
-        bool active;
-        state_enter();
-        if (g_state->op_mode == OpMode_ListenOnly) {
-            g_state->op_mode = OpMode_Active;
-            active = true;
-        } else {
-            g_state->op_mode = OpMode_ListenOnly;
-            active = false;
+        if (vptr && g_can_command_queue != nullptr) {
+            while (*vptr == ' ' || *vptr == ':') vptr++;
+            int requested = atoi(vptr);
+            OpMode requested_mode = requested == (int)OpMode_Active
+                ? OpMode_Active : OpMode_ListenOnly;
+
+            bool already_pending;
+            uint32_t request_id;
+            state_enter();
+            already_pending = g_state->can_mode_switch_pending;
+            request_id = ++g_can_request_id;
+            if (!already_pending) {
+                g_state->can_mode_switch_pending = true;
+                g_state->can_mode_switch_failed = false;
+                g_state->can_mode_switch_request_id = request_id;
+            }
+            state_exit();
+
+            if (!already_pending) {
+                CanCommand command = {CanCommandType::SetMode, requested_mode, request_id};
+                if (xQueueSend(g_can_command_queue, &command, 0) != pdTRUE) {
+                    state_enter();
+                    if (g_state->can_mode_switch_request_id == request_id) {
+                        g_state->can_mode_switch_pending = false;
+                        g_state->can_mode_switch_failed = true;
+                    }
+                    state_exit();
+                    Serial.println("[Web] CAN mode command queue full");
+                }
+            }
         }
-        saved = *g_state;
-        state_exit();
-        bool can_ok = !g_can || g_can->setListenOnly(!active);
-        Serial.println(active ?
-            (can_ok ? "[Web] → Active mode" : "[Web] → Active mode FAILED") :
-            (can_ok ? "[Web] → Listen-Only mode" : "[Web] → Listen-Only mode FAILED"));
-        prefs_save(&saved);
     } else if (strstr(buf, "\"nag\"")) {
         if (vptr) {
             while (*vptr == ' ' || *vptr == ':') vptr++;
@@ -1802,10 +1833,11 @@ static void handle_ota_done() {
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
-void web_dashboard_init(FSDState *state, CanDriver *can, portMUX_TYPE *state_mux) {
+void web_dashboard_init(FSDState *state, QueueHandle_t can_command_queue,
+                        portMUX_TYPE *state_mux) {
     g_state       = state;
     g_state_mux   = state_mux;
-    g_can         = can;
+    g_can_command_queue = can_command_queue;
     g_start_ms    = millis();
     g_last_fps_ms = millis();
     FSDState initial_state;
