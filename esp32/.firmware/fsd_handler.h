@@ -52,6 +52,7 @@ struct FSDState {
     bool           can_mode_switch_failed;
     uint32_t       can_mode_switch_request_id;
     bool           can_driver_available;
+    bool           can_tx_armed;             // startup delay + live-RX threshold satisfied
     bool           tesla_ota_in_progress;   // pause TX during OTA
     uint8_t        ota_raw_state;           // raw GTW_updateInProgress bits [1:0]
     uint8_t        ota_assert_count;        // consecutive "in-progress" samples
@@ -59,6 +60,13 @@ struct FSDState {
     uint32_t       rx_missed_count;         // TWAI RX queue missed frames
     uint32_t       bus_error_count;         // CAN controller bus errors
     uint32_t       rx_overrun_count;        // TWAI hardware RX overruns
+    uint32_t       rx_rejected_count;       // unsupported/invalid RX frames discarded
+    uint32_t       tx_invalid_count;        // invalid standard-ID/DLC TX requests rejected
+    uint32_t       rx_queue_pending;
+    uint32_t       tx_queue_pending;
+    uint32_t       rx_queue_peak;
+    uint32_t       tx_queue_peak;
+    bool           can_queue_stats_valid;   // false for drivers without queue telemetry
     uint32_t       twai_restart_count;      // automatic CAN controller restarts
     uint8_t        twai_state;              // TWAI_STATE_* value (0=Stopped,1=Running,2=Bus-Off,3=Recovering)
     uint32_t       can_stack_free_words;    // CAN task stack high-water mark
@@ -167,6 +175,9 @@ bool fsd_handle_isa_speed_chime(CanFrame *frame);
 /** Build an echo of EPAS3P_sysStatus (0x370) with counter+1 and handsOnLevel=1.
  *  Writes result into *out.  Returns true if echo should be sent. */
 bool fsd_handle_nag_killer(FSDState *state, const CanFrame *frame, CanFrame *out);
+
+/** Commit NAG accounting and own-echo memory after successful hardware TX. */
+void fsd_commit_nag_echo(FSDState *state, const CanFrame *echo);
 
 /** Parse BMS_hvBusStatus (0x132) — updates pack_voltage_v / pack_current_a. */
 void fsd_handle_bms_hv(FSDState *state, const CanFrame *frame);

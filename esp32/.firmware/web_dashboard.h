@@ -26,5 +26,8 @@
 void web_dashboard_init(FSDState *state, QueueHandle_t can_command_queue,
                         portMUX_TYPE *state_mux);
 
+/** True after the Web task has been created and completed at least one loop. */
+bool web_dashboard_healthy();
+
 /** Compatibility no-op; Web work runs in the Core 0 task. */
 void web_dashboard_update();

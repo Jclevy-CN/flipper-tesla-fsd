@@ -36,11 +36,7 @@ static uint32_t      g_can_request_id = 0;
 static WebServer        g_http(80);
 static WebSocketsServer g_ws(81);
 
-#if defined(BOARD_LILYGO)
-static constexpr bool k_sd_available = true;
-#else
 static constexpr bool k_sd_available = false;
-#endif
 
 static uint32_t g_start_ms    = 0;
 static uint32_t g_last_rx     = 0;
@@ -48,6 +44,7 @@ static uint32_t g_last_fps_ms = 0;
 static uint32_t g_last_can_seen_ms = 0;
 static float    g_fps         = 0.0f;
 static TaskHandle_t g_web_task_handle = nullptr;
+static volatile uint32_t g_web_task_heartbeat = 0;
 static char     g_json_buf[4096];
 
 #define CAN_VEHICLE_ALIVE_MS 3000u
@@ -327,6 +324,10 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <div class="sb"><div class="sv" id="rxMissed">0</div><div class="sl">RX Missed</div></div>
     <div class="sb"><div class="sv" id="busErr">0</div><div class="sl">Bus Errors</div></div>
     <div class="sb"><div class="sv" id="rxOverrun">0</div><div class="sl">RX Overrun</div></div>
+    <div class="sb"><div class="sv" id="rxRejected">0</div><div class="sl">RX Rejected</div></div>
+    <div class="sb"><div class="sv" id="txInvalid">0</div><div class="sl">TX Invalid</div></div>
+    <div class="sb"><div class="sv" id="rxQueue">--</div><div class="sl">RX Queue / Peak</div></div>
+    <div class="sb"><div class="sv" id="txQueue">--</div><div class="sl">TX Queue / Peak</div></div>
     <div class="sb"><div class="sv" id="twaiRestarts">0</div><div class="sl">TWAI Restarts</div></div>
     <div class="sb"><div class="sv" id="twaiState">--</div><div class="sl">TWAI State</div></div>
     <div class="sb"><div class="sv" id="fps">0.0</div><div class="sl">Frames/s</div></div>
@@ -651,6 +652,8 @@ function upd(d){
     pill('opMode',false,'Driver Unavailable');
   }else if(d.can_mode_switch_failed){
     pill('opMode',false,'Switch Failed');
+  }else if(d.op_mode===1 && !d.can_tx_armed){
+    pill('opMode',false,'Active · TX Arming');
   }else{
     pill('opMode',d.op_mode===1,d.op_mode===1?'Active':'Listen-Only');
   }
@@ -794,6 +797,10 @@ function upd(d){
   if(document.getElementById('rxMissed')) document.getElementById('rxMissed').textContent=(d.rx_missed||0).toLocaleString();
   if(document.getElementById('busErr')) document.getElementById('busErr').textContent=(d.bus_errors||0).toLocaleString();
   if(document.getElementById('rxOverrun')) document.getElementById('rxOverrun').textContent=(d.rx_overrun||0).toLocaleString();
+  if(document.getElementById('rxRejected')) document.getElementById('rxRejected').textContent=(d.rx_rejected||0).toLocaleString();
+  if(document.getElementById('txInvalid')) document.getElementById('txInvalid').textContent=(d.tx_invalid||0).toLocaleString();
+  if(document.getElementById('rxQueue')) document.getElementById('rxQueue').textContent=d.queue_stats_valid?((d.rx_pending||0)+' / '+(d.rx_queue_peak||0)):'N/A';
+  if(document.getElementById('txQueue')) document.getElementById('txQueue').textContent=d.queue_stats_valid?((d.tx_pending||0)+' / '+(d.tx_queue_peak||0)):'N/A';
   if(document.getElementById('twaiRestarts')) document.getElementById('twaiRestarts').textContent=(d.twai_restarts||0).toLocaleString();
   if(document.getElementById('twaiState')) document.getElementById('twaiState').textContent=TWAI[d.twai_state]||'Unknown';
   if(document.getElementById('fps')) document.getElementById('fps').textContent=(d.fps||0.0).toFixed(1);
@@ -822,8 +829,9 @@ function upd(d){
   if(document.getElementById('chipTemp')) document.getElementById('chipTemp').textContent=d.chip_temp_valid?((d.chip_temp_c||0).toFixed(1)+'\u00b0C'):'N/A';
   if(document.getElementById('freeHeap')) document.getElementById('freeHeap').textContent=kb(d.free_heap);
   if(document.getElementById('minHeap')) document.getElementById('minHeap').textContent=kb(d.min_free_heap);
-  if(document.getElementById('webStack')) document.getElementById('webStack').textContent=kb((d.web_stack_free_words||0)*4);
-  if(document.getElementById('canStack')) document.getElementById('canStack').textContent=kb((d.can_stack_free_words||0)*4);
+  // ESP-IDF reports stack high-water marks in bytes (unlike vanilla FreeRTOS).
+  if(document.getElementById('webStack')) document.getElementById('webStack').textContent=kb(d.web_stack_free_words||0);
+  if(document.getElementById('canStack')) document.getElementById('canStack').textContent=kb(d.can_stack_free_words||0);
   if(document.getElementById('wifiCl')) document.getElementById('wifiCl').textContent=d.wifi_clients||0;
   var partEl=document.getElementById('otaPartInfo');
   if(partEl && d.ota_partition){
@@ -1240,6 +1248,7 @@ static size_t build_json(char *out, size_t out_len) {
     JAPP("\"china_mode\":%s,", state.china_mode ? "true" : "false");
     JAPP("\"tlssc_restore\":%s,", state.tlssc_restore ? "true" : "false");
     JAPP("\"can_vehicle_detected\":%s,", can_vehicle_detected ? "true" : "false");
+    JAPP("\"can_tx_armed\":%s,", state.can_tx_armed ? "true" : "false");
     JAPP("\"bms_hv_seen\":%lu,", (unsigned long)state.seen_bms_hv);
     JAPP("\"bms_soc_seen\":%lu,", (unsigned long)state.seen_bms_soc);
     JAPP("\"bms_thermal_seen\":%lu,", (unsigned long)state.seen_bms_thermal);
@@ -1253,6 +1262,13 @@ static size_t build_json(char *out, size_t out_len) {
     JAPP("\"rx_missed\":%lu,", (unsigned long)state.rx_missed_count);
     JAPP("\"bus_errors\":%lu,", (unsigned long)state.bus_error_count);
     JAPP("\"rx_overrun\":%lu,", (unsigned long)state.rx_overrun_count);
+    JAPP("\"rx_rejected\":%lu,", (unsigned long)state.rx_rejected_count);
+    JAPP("\"tx_invalid\":%lu,", (unsigned long)state.tx_invalid_count);
+    JAPP("\"queue_stats_valid\":%s,", state.can_queue_stats_valid ? "true" : "false");
+    JAPP("\"rx_pending\":%lu,", (unsigned long)state.rx_queue_pending);
+    JAPP("\"tx_pending\":%lu,", (unsigned long)state.tx_queue_pending);
+    JAPP("\"rx_queue_peak\":%lu,", (unsigned long)state.rx_queue_peak);
+    JAPP("\"tx_queue_peak\":%lu,", (unsigned long)state.tx_queue_peak);
     JAPP("\"twai_restarts\":%lu,", (unsigned long)state.twai_restart_count);
     JAPP("\"twai_state\":%u,", (unsigned)state.twai_state);
     JAPP("\"crc_errors\":%lu,", (unsigned long)(state.rx_missed_count + state.bus_error_count + state.rx_overrun_count));
@@ -1892,6 +1908,7 @@ static void web_server_task(void *param) {
     Serial.printf("[Web] Task started on Core %d\n", xPortGetCoreID());
 
     while (true) {
+        g_web_task_heartbeat = millis();
         if (g_state != nullptr) {
             wifi_process_dns();
             g_http.handleClient();
@@ -1922,6 +1939,10 @@ static void web_server_task(void *param) {
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }
+}
+
+bool web_dashboard_healthy() {
+    return g_web_task_handle != nullptr && g_web_task_heartbeat != 0;
 }
 
 void web_dashboard_update() {

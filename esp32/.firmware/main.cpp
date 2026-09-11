@@ -42,9 +42,17 @@ static CanDriver *g_can   = nullptr;
 static FSDState   g_state = {};
 static portMUX_TYPE g_state_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t g_can_start_ms = 0;
+static uint32_t g_can_tx_arm_start_ms = 0;
+static uint32_t g_can_tx_arm_rx_baseline = 0;
+static bool g_ota_pending_verify = false;
+static uint32_t g_ota_verify_start_ms = 0;
+static uint32_t g_ota_verify_last_attempt_ms = 0;
+static bool g_web_runtime_expected = false;
 
 static void state_enter();
 static void state_exit();
+static void reset_can_tx_arming();
+static void clear_pending_transmit(const char *reason);
 
 #if defined(BOARD_WAVESHARE_S3)
 static bool g_chip_temp_ready = false;
@@ -98,6 +106,8 @@ static bool apply_can_mode(OpMode requested_mode, uint32_t request_id,
     saved = g_state;
     state_exit();
 
+    if (ok) reset_can_tx_arming();
+
     const char *mode = requested_mode == OpMode_Active ? "Active" : "Listen-Only";
     const char *result_text = ok ? "OK" :
         (result == CanModeResult::SwitchFailedRolledBack ? "FAILED, rolled back" :
@@ -122,6 +132,26 @@ static FSDState state_snapshot() {
     s = g_state;
     state_exit();
     return s;
+}
+
+static bool driver_transmit_gate(const CanFrame &frame) {
+    (void)frame;
+    FSDState state = state_snapshot();
+    return fsd_can_transmit(&state);
+}
+
+static void reset_can_tx_arming() {
+    state_enter();
+    g_state.can_tx_armed = false;
+    g_can_tx_arm_rx_baseline = g_state.rx_count;
+    state_exit();
+    g_can_tx_arm_start_ms = millis();
+}
+
+static void clear_pending_transmit(const char *reason) {
+    bool ok = g_can != nullptr && g_can->clearPendingTransmit();
+    Serial.printf("[CAN] Pending TX clear %s (%s)\n", ok ? "OK" : "FAILED", reason);
+    can_dump_log("TXQ clear %s (%s)", ok ? "OK" : "FAILED", reason);
 }
 
 static const char *reset_reason_name(esp_reset_reason_t reason) {
@@ -298,6 +328,7 @@ static bool restart_can_driver_for_state(const FSDState& state, const char *reas
     g_state.can_mode_switch_failed = !ok;
     if (!ok) g_state.op_mode = OpMode_ListenOnly;
     state_exit();
+    if (ok) reset_can_tx_arming();
     Serial.printf("[CAN] TWAI restart %s (%s, mode=%s)\n",
                   ok ? "OK" : "FAILED",
                   reason,
@@ -461,11 +492,16 @@ static void process_frame(const CanFrame &frame) {
         raw = g_state.ota_raw_state;
         state_exit();
         if (!was_ota && is_ota) {
+            reset_can_tx_arming();
+            clear_pending_transmit("OTA started");
             Serial.printf("[OTA] Update in progress (raw=%u) - TX suspended\n", raw);
             can_dump_log("OTA  started — TX suspended");
         } else if (was_ota && !is_ota) {
-            Serial.printf("[OTA] Update finished (raw=%u) - TX resumed\n", raw);
-            can_dump_log("OTA  finished — TX resumed");
+            // Do not resume immediately with signal state accumulated before or
+            // during the update. Require a fresh delay and RX baseline first.
+            reset_can_tx_arming();
+            Serial.printf("[OTA] Update finished (raw=%u) - TX re-arming\n", raw);
+            can_dump_log("OTA  finished — TX re-arming");
         }
         return;
     }
@@ -498,13 +534,17 @@ static void process_frame(const CanFrame &frame) {
             uint8_t cnt_out = echo.data[6] & 0x0F;
             can_dump_log("NAG 0x370 hands_off lvl=%u cnt=%u->%u TX echo",
                          lvl, cnt_in, cnt_out);
-            send_can_frame_if_allowed(echo);
+            if (send_can_frame_if_allowed(echo)) {
+                state_enter();
+                fsd_commit_nag_echo(&g_state, &echo);
+                state_exit();
+            }
         }
         return;
     }
 
-    // Legacy stalk (0x045) — updates speed_profile, no TX
-    state = state_snapshot();
+    // Legacy stalk (0x045) — updates speed_profile, no TX. Reuse the snapshot
+    // taken above; no shared state has changed on this path.
     if (frame.id == CAN_ID_STW_ACTN_RQ && state.hw_version == TeslaHW_Legacy) {
         state_enter();
         fsd_handle_legacy_stalk(&g_state, &frame);
@@ -655,6 +695,28 @@ static void can_task(void *param) {
 
         button_tick();
 
+        // Sample queue pressure before draining RX; sampling afterwards would
+        // make a healthy fast consumer misleadingly report a permanent zero.
+        static uint32_t last_err_ms = 0;
+        if ((now - last_err_ms) >= 250u) {
+            CanErrorStats stats = g_can->errorStats();
+            state_enter();
+            g_state.rx_missed_count = stats.rx_missed;
+            g_state.bus_error_count = stats.bus_errors;
+            g_state.rx_overrun_count = stats.rx_overrun;
+            g_state.rx_rejected_count = stats.rx_rejected;
+            g_state.tx_invalid_count = stats.tx_invalid;
+            g_state.rx_queue_pending = stats.rx_pending;
+            g_state.tx_queue_pending = stats.tx_pending;
+            g_state.rx_queue_peak = stats.rx_queue_peak;
+            g_state.tx_queue_peak = stats.tx_queue_peak;
+            g_state.can_queue_stats_valid = stats.queue_stats_valid;
+            g_state.twai_state = stats.state;
+            g_state.can_stack_free_words = uxTaskGetStackHighWaterMark(nullptr);
+            state_exit();
+            last_err_ms = now;
+        }
+
         // Drain all available CAN frames in one shot
         CanFrame frame;
         while (g_can->receive(frame)) {
@@ -667,20 +729,22 @@ static void can_task(void *param) {
             state_enter();
             g_state.twai_restart_count++;
             state_exit();
+            reset_can_tx_arming();
         }
 
-        // ── Periodic CAN diagnostics refresh (~every 250 ms) ──────────────────
-        static uint32_t last_err_ms = 0;
-        if ((now - last_err_ms) >= 250u) {
-            CanErrorStats stats = g_can->errorStats();
-            state_enter();
-            g_state.rx_missed_count = stats.rx_missed;
-            g_state.bus_error_count = stats.bus_errors;
-            g_state.rx_overrun_count = stats.rx_overrun;
-            g_state.twai_state = stats.state;
-            g_state.can_stack_free_words = uxTaskGetStackHighWaterMark(nullptr);
-            state_exit();
-            last_err_ms = now;
+        // Re-arm after each controller start only when both time and sustained
+        // live-traffic requirements have been met. Other TX gates remain in force.
+        uint32_t arm_check_ms = millis();
+        state_enter();
+        bool arm_now = !g_state.can_tx_armed &&
+            (arm_check_ms - g_can_tx_arm_start_ms) >= CAN_TX_ARM_DELAY_MS &&
+            (g_state.rx_count - g_can_tx_arm_rx_baseline) >= CAN_TX_ARM_RX_FRAMES;
+        if (arm_now) g_state.can_tx_armed = true;
+        state_exit();
+        if (arm_now) {
+            Serial.println("[CAN] TX armed — startup delay and live-RX threshold satisfied");
+            can_dump_log("TX armed after %lu RX frames",
+                         (unsigned long)CAN_TX_ARM_RX_FRAMES);
         }
 
         // ── ESP32-S3 chip temperature (~every 3 s, not in frame hot path) ──────
@@ -834,12 +898,11 @@ void setup() {
         esp_ota_img_states_t ota_state;
         if (esp_ota_get_state_partition(running, &ota_state) == ESP_OK) {
             if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
-                Serial.println("[OTA] First boot after update - marking as valid...");
-                if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
-                    Serial.println("[OTA] Firmware marked valid");
-                } else {
-                    Serial.println("[OTA] WARNING: Could not mark firmware valid");
-                }
+                // Defer acceptance until the CAN task has actually run and the
+                // firmware has remained healthy for a short observation period.
+                g_ota_pending_verify = true;
+                g_ota_verify_start_ms = millis();
+                Serial.println("[OTA] First boot after update - validation pending");
             } else if (ota_state == ESP_OTA_IMG_VALID) {
                 Serial.println("[OTA] Running verified firmware");
             }
@@ -926,6 +989,7 @@ void setup() {
 #endif
 
     g_can = can_driver_create();
+    g_can->setTransmitGate(driver_transmit_gate);
     if (!g_can->begin(true)) {
         Serial.println("[ERR] CAN driver init FAILED — check wiring");
         led_set(LED_RED);
@@ -937,10 +1001,12 @@ void setup() {
     }
     g_state.can_driver_available = true;
     g_can_start_ms = millis();
+    reset_can_tx_arming();
 
     if (g_state.op_mode == OpMode_Active) {
         CanModeResult mode_result = g_can->setListenOnly(false);
         if (mode_result == CanModeResult::Switched) {
+            reset_can_tx_arming();
             Serial.println("[CAN] 500 kbps — Active (restored from NVS)");
         } else {
             bool driver_available = mode_result == CanModeResult::SwitchFailedRolledBack;
@@ -969,6 +1035,7 @@ void setup() {
 
     // ── WiFi AP + Web dashboard (non-fatal if WiFi fails) ─────────────────────
     if (wifi_ap_init(&g_state)) {
+        g_web_runtime_expected = true;
         web_dashboard_init(&g_state, g_can_command_queue, &g_state_mux);
     }
 
@@ -995,5 +1062,25 @@ void setup() {
 
 // ── loop ──────────────────────────────────────────────────────────────────────
 void loop() {
+    uint32_t now = millis();
+    if (g_ota_pending_verify &&
+        (now - g_ota_verify_start_ms) >= OTA_BOOT_VERIFY_DELAY_MS &&
+        (g_ota_verify_last_attempt_ms == 0 ||
+         (now - g_ota_verify_last_attempt_ms) >= OTA_BOOT_VERIFY_RETRY_MS)) {
+        FSDState state = state_snapshot();
+        // A non-zero CAN stack watermark proves the task reached its periodic
+        // diagnostics path instead of merely being created successfully.
+        if (g_can_task_handle != nullptr && state.can_driver_available &&
+            state.can_stack_free_words > 0 &&
+            (!g_web_runtime_expected || web_dashboard_healthy())) {
+            g_ota_verify_last_attempt_ms = now;
+            if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
+                g_ota_pending_verify = false;
+                Serial.println("[OTA] Runtime healthy - firmware marked valid");
+            } else {
+                Serial.println("[OTA] WARNING: Could not mark firmware valid; will retry");
+            }
+        }
+    }
     vTaskDelay(pdMS_TO_TICKS(100));
 }

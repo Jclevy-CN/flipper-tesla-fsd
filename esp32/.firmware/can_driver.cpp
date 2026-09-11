@@ -22,6 +22,10 @@ class TwaiDriver : public CanDriver {
     bool     listen_only_ = false;
     bool     installed_   = false;
     bool     recovering_  = false;
+    uint32_t rx_rejected_ = 0;
+    uint32_t tx_invalid_  = 0;
+    uint32_t rx_queue_peak_ = 0;
+    uint32_t tx_queue_peak_ = 0;
 
     bool install_and_start(bool listen_only) {
         twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(
@@ -60,7 +64,11 @@ public:
     }
 
     bool send(const CanFrame &frame) override {
-        if (listen_only_) return false;
+        if (frame.id > 0x7FFu || frame.dlc > 8u) {
+            tx_invalid_++;
+            return false;
+        }
+        if (!transmitAllowed(frame) || !installed_ || listen_only_) return false;
         twai_message_t msg;
         memset(&msg, 0, sizeof(msg));
         msg.identifier       = frame.id;
@@ -71,13 +79,23 @@ public:
     }
 
     bool receive(CanFrame &frame) override {
-        twai_message_t msg;
-        // Non-blocking receive (timeout = 0)
-        if (twai_receive(&msg, 0) != ESP_OK) return false;
-        frame.id  = msg.identifier;
-        frame.dlc = msg.data_length_code;
-        memcpy(frame.data, msg.data, frame.dlc);
-        return true;
+        // Drain a bounded number of unsupported frames without making the
+        // caller mistake one rejection for an empty RX queue.
+        for (uint8_t attempt = 0; attempt < 8u; attempt++) {
+            twai_message_t msg;
+            if (twai_receive(&msg, 0) != ESP_OK) return false;
+            if (msg.extd || msg.rtr || msg.identifier > 0x7FFu ||
+                msg.data_length_code > 8u) {
+                rx_rejected_++;
+                continue;
+            }
+            frame.id  = msg.identifier;
+            frame.dlc = msg.data_length_code;
+            memset(frame.data, 0, sizeof(frame.data));
+            memcpy(frame.data, msg.data, frame.dlc);
+            return true;
+        }
+        return false;
     }
 
     CanErrorStats errorStats() override {
@@ -87,6 +105,15 @@ public:
         stats.rx_missed = info.rx_missed_count;
         stats.bus_errors = info.bus_error_count;
         stats.rx_overrun = info.rx_overrun_count;
+        stats.rx_rejected = rx_rejected_;
+        stats.tx_invalid = tx_invalid_;
+        stats.rx_pending = info.msgs_to_rx;
+        stats.tx_pending = info.msgs_to_tx;
+        if (info.msgs_to_rx > rx_queue_peak_) rx_queue_peak_ = info.msgs_to_rx;
+        if (info.msgs_to_tx > tx_queue_peak_) tx_queue_peak_ = info.msgs_to_tx;
+        stats.rx_queue_peak = rx_queue_peak_;
+        stats.tx_queue_peak = tx_queue_peak_;
+        stats.queue_stats_valid = true;
         stats.state = (uint8_t)info.state;
         return stats;
     }
@@ -129,6 +156,10 @@ public:
         stop_and_uninstall();
         return install_and_start(listen_only);
     }
+
+    bool clearPendingTransmit() override {
+        return installed_ && twai_clear_transmit_queue() == ESP_OK;
+    }
 };
 
 CanDriver *can_driver_create() {
@@ -146,6 +177,8 @@ class Mcp2515Driver : public CanDriver {
     bool     listen_only_  = false;
     bool     ready_        = false;
     uint32_t err_count_    = 0;
+    uint32_t rx_rejected_  = 0;
+    uint32_t tx_invalid_   = 0;
 
 public:
     Mcp2515Driver() : mcp_(PIN_MCP_CS) {}
@@ -169,8 +202,12 @@ public:
     }
 
     bool send(const CanFrame &frame) override {
-        if (!ready_ || listen_only_) return false;
-        struct can_frame f;
+        if (frame.id > CAN_SFF_MASK || frame.dlc > 8u) {
+            tx_invalid_++;
+            return false;
+        }
+        if (!transmitAllowed(frame) || !ready_ || listen_only_) return false;
+        struct can_frame f = {};
         f.can_id  = frame.id;
         f.can_dlc = frame.dlc;
         memcpy(f.data, frame.data, frame.dlc);
@@ -182,17 +219,28 @@ public:
     }
 
     bool receive(CanFrame &frame) override {
-        struct can_frame f;
-        if (mcp_.readMessage(&f) != MCP2515::ERROR_OK) return false;
-        frame.id  = f.can_id;
-        frame.dlc = f.can_dlc;
-        memcpy(frame.data, f.data, f.can_dlc);
-        return true;
+        for (uint8_t attempt = 0; attempt < 8u; attempt++) {
+            struct can_frame f = {};
+            if (mcp_.readMessage(&f) != MCP2515::ERROR_OK) return false;
+            if ((f.can_id & ~CAN_SFF_MASK) != 0u || f.can_dlc > 8u) {
+                rx_rejected_++;
+                continue;
+            }
+            frame.id  = f.can_id & CAN_SFF_MASK;
+            frame.dlc = f.can_dlc;
+            memset(frame.data, 0, sizeof(frame.data));
+            memcpy(frame.data, f.data, frame.dlc);
+            return true;
+        }
+        return false;
     }
 
     CanErrorStats errorStats() override {
         CanErrorStats stats = {};
         stats.bus_errors = err_count_;
+        stats.rx_rejected = rx_rejected_;
+        stats.tx_invalid = tx_invalid_;
+        stats.queue_stats_valid = false;
         return stats;
     }
 
@@ -216,6 +264,13 @@ public:
 
     bool restart(bool listen_only) override {
         return begin(listen_only);
+    }
+
+    bool clearPendingTransmit() override {
+        if (!ready_) return false;
+        // autowp-mcp2515 does not expose the MCP2515 ABAT control. A reset and
+        // reinitialisation guarantees that all TXREQ slots are discarded.
+        return begin(listen_only_);
     }
 };
 

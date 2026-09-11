@@ -137,6 +137,7 @@ void fsd_apply_hw_version(FSDState *state, TeslaHWVersion hw) {
 
 bool fsd_can_transmit(const FSDState *state) {
     if (!state->can_driver_available)        return false;
+    if (!state->can_tx_armed)                return false;
     if (state->op_mode == OpMode_ListenOnly) return false;
     if (state->tesla_ota_in_progress)        return false;
     return true;
@@ -428,6 +429,8 @@ static uint32_t nag_prng_state       = 0xDEADBEEFu;
 static int16_t  nag_torq_walk        = 2230;   // raw init ≈ 1.80 Nm
 static uint8_t  nag_exc_frames       = 0;
 static uint16_t nag_frames_until_exc = 175;
+static CanFrame nag_last_echo        = {};
+static bool     nag_last_echo_valid  = false;
 
 static uint32_t nag_xorshift32() {
     uint32_t x = nag_prng_state;
@@ -441,6 +444,12 @@ static uint32_t nag_xorshift32() {
 bool fsd_handle_nag_killer(FSDState *state, const CanFrame *frame, CanFrame *out) {
     if (frame->dlc < 8)     return false;
     if (!state->nag_killer) return false;
+
+    if (nag_last_echo_valid &&
+        frame->id == nag_last_echo.id &&
+        frame->dlc == nag_last_echo.dlc &&
+        memcmp(frame->data, nag_last_echo.data, sizeof(frame->data)) == 0)
+        return false;
 
     // EPAS handsOnLevel: bits 7:6 of byte 4.  Skip only when level==1 (hands OK).
     uint8_t hands_on = (frame->data[4] >> 6) & 0x03u;
@@ -494,9 +503,15 @@ bool fsd_handle_nag_killer(FSDState *state, const CanFrame *frame, CanFrame *out
     sum += (CAN_ID_EPAS_STATUS & 0xFFu) + (CAN_ID_EPAS_STATUS >> 8);
     out->data[7] = (uint8_t)(sum & 0xFFu);
 
+    return true;
+}
+
+void fsd_commit_nag_echo(FSDState *state, const CanFrame *echo) {
+    if (state == nullptr || echo == nullptr) return;
     state->nag_echo_count++;
     state->nag_suppressed = true;
-    return true;
+    nag_last_echo = *echo;
+    nag_last_echo_valid = true;
 }
 
 // ── BMS read-only parsers ─────────────────────────────────────────────────────
