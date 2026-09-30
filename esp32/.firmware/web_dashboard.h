@@ -30,8 +30,8 @@ void web_dashboard_init(FSDState *state, QueueHandle_t can_command_queue,
                         portMUX_TYPE *state_mux,
                         RestartPrepareCallback prepare_restart);
 
-/** True after the Web task has been created and completed at least one loop. */
-bool web_dashboard_healthy();
+/** True only when the Web task has produced a recent heartbeat. */
+bool web_dashboard_healthy(uint32_t now_ms, uint32_t max_age_ms);
 
 /** Compatibility no-op; Web work runs in the Core 0 task. */
 void web_dashboard_update();

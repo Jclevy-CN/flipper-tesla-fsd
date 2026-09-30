@@ -116,6 +116,17 @@ void fsd_apply_hw_version(FSDState *state, TeslaHWVersion hw) {
         state->hw3_offset_auto_valid = false;
         state->hw3_offset_active = 0;
         state->hw4_offset_active = 0;
+        state->das_seen = false;
+        state->das_hw4_status_seen = false;
+        state->das_ap_state = 0;
+        state->das_hands_on_state = 0;
+        state->autopark_ready = false;
+        state->autopark_parked = false;
+        state->autopark_waiting_brake = false;
+        state->autopark_bit_last_ms = 0;
+        state->autopark_prev_ap_state = 0;
+        state->autopark_episode = false;
+        state->autopark_tx_block = false;
     }
     if (!state->profile_mode_auto) {
         uint8_t max_profile = max_speed_profile_for_hw(hw);
@@ -140,6 +151,7 @@ bool fsd_can_transmit(const FSDState *state) {
     if (!state->can_tx_armed)                return false;
     if (state->op_mode == OpMode_ListenOnly) return false;
     if (state->tesla_ota_in_progress)        return false;
+    if (state->autopark_tx_block)            return false;
     return true;
 }
 
@@ -147,6 +159,14 @@ bool fsd_can_transmit(const FSDState *state) {
 
 TeslaHWVersion fsd_detect_hw_version(const CanFrame *frame) {
     if (frame->id != CAN_ID_GTW_CAR_CONFIG) return TeslaHW_Unknown;
+    bool all_zero = true;
+    for (uint8_t i = 0; i < frame->dlc && i < 8u; ++i) {
+        if (frame->data[i] != 0u) {
+            all_zero = false;
+            break;
+        }
+    }
+    if (all_zero) return TeslaHW_Unknown;
     // DAS_HWversion field: bits 7:6 of byte 0  (das_hw)
     uint8_t das_hw = (frame->data[0] >> 6) & 0x03;
     switch (das_hw) {
@@ -264,7 +284,7 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
             frame->data[6] |= (uint8_t)((state->speed_profile & 0x03) << 1);
             modified = true;
         }
-        if (mux == 1) {
+        if (mux == 1 && state->nag_killer) {
             // Nag suppression via bit 19 (clear = no hands-on-wheel request)
             set_bit(frame, 19, false);
             state->nag_suppressed = true;
@@ -311,7 +331,7 @@ bool fsd_handle_autopilot_frame(FSDState *state, CanFrame *frame) {
                 set_bit(frame, 59, true);  // emergency vehicle detection
             modified = true;
         }
-        if (mux == 1) {
+        if (mux == 1 && state->nag_killer) {
             set_bit(frame, 19, false);  // clear hands-on-wheel nag
             set_bit(frame, 47, true);   // HW4 nag-suppression confirmation bit
             state->nag_suppressed = true;
@@ -390,7 +410,7 @@ bool fsd_handle_legacy_autopilot(FSDState *state, CanFrame *frame) {
         frame->data[6] |= (uint8_t)((state->speed_profile & 0x03) << 1);
         modified = true;
     }
-    if (mux == 1) {
+    if (mux == 1 && state->nag_killer) {
         set_bit(frame, 19, false);
         state->nag_suppressed = true;
         modified = true;
@@ -600,11 +620,70 @@ void fsd_handle_isa_speed_status(FSDState *state, const CanFrame *frame) {
     }
 }
 
-// ── DAS status (0x39B) — nag killer gating ───────────────────────────────────
+// ── DAS status / Autopark ────────────────────────────────────────────────────
 
-void fsd_handle_das_status(FSDState *state, const CanFrame *frame) {
-    if (frame->dlc < 6) return;
-    // DAS_autopilotHandsOnState: bit42|4 LE → byte5 bits[5:2]
+static void fsd_parse_autopark_bits(FSDState *state, uint8_t byte3) {
+    state->autopark_ready = (byte3 & 0x01u) != 0u;
+    state->autopark_parked = (byte3 & 0x02u) != 0u;
+    state->autopark_waiting_brake = (byte3 & 0x04u) != 0u;
+}
+
+static void fsd_handle_das_status_common(FSDState *state, const CanFrame *frame) {
     state->das_hands_on_state = (frame->data[5] >> 2) & 0x0Fu;
     state->das_seen = true;
+}
+
+void fsd_handle_das_status_hw3(FSDState *state, const CanFrame *frame) {
+    if (frame->dlc != 8u) return;
+    state->das_ap_state = frame->data[0] & 0x0Fu;
+    fsd_parse_autopark_bits(state, frame->data[3]);
+    fsd_handle_das_status_common(state, frame);
+}
+
+void fsd_handle_das_status_hw4(FSDState *state, const CanFrame *frame) {
+    if (frame->dlc != 8u) return;
+    state->das_ap_state = frame->data[0] & 0x0Fu;
+    fsd_parse_autopark_bits(state, frame->data[3]);
+    fsd_handle_das_status_common(state, frame);
+    state->das_hw4_status_seen = true;
+}
+
+void fsd_handle_das_handsonly_399(FSDState *state, const CanFrame *frame) {
+    if (frame->dlc < 6u) return;
+    state->das_hands_on_state = (frame->data[5] >> 2) & 0x0Fu;
+    state->das_seen = true;
+}
+
+void fsd_handle_di_speed(FSDState *state, const CanFrame *frame) {
+    if (frame->dlc < 4u) return;
+    uint16_t raw = (uint16_t)(((uint16_t)frame->data[2] << 4) | (frame->data[1] >> 4));
+    float kph = (float)raw * 0.08f - 40.0f;
+    state->vehicle_speed_kph = kph < 0.0f ? 0.0f : kph;
+    state->speed_seen = true;
+}
+
+void fsd_autopark_update(FSDState *state, uint32_t now_ms) {
+    const uint8_t active_fsd = 6u;
+    bool any_bit = state->autopark_ready || state->autopark_parked ||
+                   state->autopark_waiting_brake;
+    if (any_bit) state->autopark_bit_last_ms = now_ms;
+    bool bit_recent = state->autopark_bit_last_ms != 0u &&
+                      (uint32_t)(now_ms - state->autopark_bit_last_ms) <= 3000u;
+
+    if (state->das_ap_state == active_fsd) {
+        if (state->autopark_prev_ap_state != active_fsd &&
+            (state->autopark_prev_ap_state <= 2u || any_bit || bit_recent)) {
+            state->autopark_episode = true;
+        }
+        if (any_bit) state->autopark_episode = true;
+    } else {
+        state->autopark_episode = false;
+    }
+
+    bool speed_fresh = state->speed_seen &&
+                       (uint32_t)(now_ms - state->last_speed_tick_ms) <= 1000u;
+    bool driving = speed_fresh && state->vehicle_speed_kph > 20.0f &&
+                   state->vehicle_speed_kph <= 284.96f;
+    state->autopark_tx_block = state->autopark_episode && !driving;
+    state->autopark_prev_ap_state = state->das_ap_state;
 }

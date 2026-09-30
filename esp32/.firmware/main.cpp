@@ -48,6 +48,7 @@ static bool g_ota_pending_verify = false;
 static uint32_t g_ota_verify_start_ms = 0;
 static uint32_t g_ota_verify_last_attempt_ms = 0;
 static bool g_web_runtime_expected = false;
+static volatile uint32_t g_can_task_heartbeat_ms = 0;
 
 static void state_enter();
 static void state_exit();
@@ -133,6 +134,17 @@ static FSDState state_snapshot() {
     s = g_state;
     state_exit();
     return s;
+}
+
+static bool hw_uses_hw3_das_status(TeslaHWVersion hw) {
+    return hw == TeslaHW_Legacy || hw == TeslaHW_HW3;
+}
+
+static bool frame_looks_like_hw3_das_status(const CanFrame &frame) {
+    if (frame.id != CAN_ID_DAS_STATUS_HW3 || frame.dlc != 8u) return false;
+    uint8_t ap_state = frame.data[0] & 0x0Fu;
+    uint8_t hands_on = (frame.data[5] >> 2) & 0x0Fu;
+    return ap_state <= 3u && hands_on <= 8u;
 }
 
 static bool driver_transmit_gate(const CanFrame &frame) {
@@ -298,6 +310,7 @@ static void button_tick() {
             state_enter();
             g_state.nag_killer = !g_state.nag_killer;
             enabled = g_state.nag_killer;
+            if (!enabled) g_state.nag_suppressed = false;
             saved = g_state;
             state_exit();
             Serial.printf("[BTN] NAG Killer: %s\n", enabled ? "ON" : "OFF");
@@ -470,7 +483,7 @@ static void update_led() {
     }
     if (state.rx_count == 0 && millis() > WIRING_WARN_MS) {
         led_set(LED_RED);
-    } else if (state.tesla_ota_in_progress) {
+    } else if (state.tesla_ota_in_progress || state.autopark_tx_block) {
         led_set(LED_YELLOW);
     } else if (state.op_mode == OpMode_Active) {
         led_set(LED_GREEN);
@@ -488,8 +501,14 @@ static void process_frame(const CanFrame &frame) {
     bool saw_bms_soc = false;
     bool saw_bms_thermal = false;
 
+    uint32_t now_ms = millis();
+    bool autopark_block_before;
+    bool autopark_block_after;
     state_enter();
     g_state.rx_count++;
+    autopark_block_before = g_state.autopark_tx_block;
+    fsd_autopark_update(&g_state, now_ms);
+    autopark_block_after = g_state.autopark_tx_block;
     if (frame.id == CAN_ID_GTW_CAR_STATE)  { g_state.seen_gtw_car_state++;  saw_gtw_car_state = true; }
     if (frame.id == CAN_ID_GTW_CAR_CONFIG) { g_state.seen_gtw_car_config++; saw_gtw_car_config = true; }
     if (frame.id == CAN_ID_AP_CONTROL)     { g_state.seen_ap_control++;     saw_ap_control = true; }
@@ -497,6 +516,11 @@ static void process_frame(const CanFrame &frame) {
     if (frame.id == CAN_ID_BMS_SOC)        { g_state.seen_bms_soc++;        saw_bms_soc = true; }
     if (frame.id == CAN_ID_BMS_THERMAL)    { g_state.seen_bms_thermal++;    saw_bms_thermal = true; }
     state_exit();
+
+    if (autopark_block_before != autopark_block_after) {
+        Serial.printf("[Autopark] TX %s\n", autopark_block_after ? "suspended" : "resumed");
+        can_dump_log("AUTOPARK TX %s", autopark_block_after ? "suspended" : "resumed");
+    }
 
     can_dump_record(frame);
 #if defined(BOARD_LILYGO)
@@ -547,12 +571,74 @@ static void process_frame(const CanFrame &frame) {
     if (saw_bms_soc)     { state_enter(); fsd_handle_bms_soc(&g_state, &frame);     state_exit(); return; }
     if (saw_bms_thermal) { state_enter(); fsd_handle_bms_thermal(&g_state, &frame); state_exit(); return; }
 
-    // ── DAS status (read-only, always) — gating for NAG killer ───────────────
-    if (frame.id == CAN_ID_DAS_STATUS)  { state_enter(); fsd_handle_das_status(&g_state, &frame);  state_exit(); return; }
-    if (frame.id == CAN_ID_ISA_SPEED)   { state_enter(); fsd_handle_isa_speed_status(&g_state, &frame); state_exit(); }
+    // Auto-upgrade Legacy→HW3: Palladium S/X with HW3 reports das_hw=0
+    // (→Legacy) but actually uses 0x3FD. True Legacy never broadcasts 0x3FD.
+    FSDState state = state_snapshot();
+    if (state.hw_mode_auto && state.hw_version == TeslaHW_Legacy && saw_ap_control) {
+        apply_detected_hw(TeslaHW_HW3, "upgrade:Legacy→HW3(0x3FD seen)");
+        state = state_snapshot();
+    }
+
+    // Fallback HW detection when 0x398 is unavailable. A full HW4 0x39B is
+    // explicit; 0x399 is accepted as HW3 only after two plausible samples.
+    static uint32_t hw_fallback_3fd_count = 0;
+    static uint32_t hw_fallback_399_count = 0;
+    static TeslaHWVersion hw_fallback_last_hw = TeslaHW_Unknown;
+    if (state.hw_version != hw_fallback_last_hw) {
+        hw_fallback_3fd_count = 0;
+        hw_fallback_399_count = 0;
+        hw_fallback_last_hw = state.hw_version;
+    }
+    if (state.hw_mode_auto && state.hw_version == TeslaHW_Unknown) {
+        if (frame.id == CAN_ID_AP_LEGACY) {
+            apply_detected_hw(TeslaHW_Legacy, "fallback:0x3EE");
+        } else if (frame.id == CAN_ID_DAS_STATUS_HW4 && frame.dlc == 8u) {
+            apply_detected_hw(TeslaHW_HW4, "fallback:0x39B");
+            hw_fallback_3fd_count = 0;
+            hw_fallback_399_count = 0;
+        } else if (frame_looks_like_hw3_das_status(frame)) {
+            hw_fallback_399_count++;
+            if (hw_fallback_399_count >= 2u)
+                apply_detected_hw(TeslaHW_HW3, "fallback:0x399(DAS status)");
+        } else if (saw_ap_control) {
+            hw_fallback_3fd_count++;
+            if (hw_fallback_3fd_count >= 10u)
+                apply_detected_hw(TeslaHW_HW3, "fallback:0x3FD(confirmed)");
+        }
+        state = state_snapshot();
+    }
+
+    // DAS status is read-only but layout differs by hardware generation.
+    if (frame.id == CAN_ID_DAS_STATUS_HW4 && state.hw_version == TeslaHW_HW4) {
+        state_enter();
+        fsd_handle_das_status_hw4(&g_state, &frame);
+        state_exit();
+        return;
+    }
+    if (frame.id == CAN_ID_DAS_STATUS_HW3 && hw_uses_hw3_das_status(state.hw_version)) {
+        state_enter();
+        fsd_handle_das_status_hw3(&g_state, &frame);
+        fsd_handle_isa_speed_status(&g_state, &frame);
+        state_exit();
+        return;
+    }
+    if (frame.id == CAN_ID_ISA_SPEED && state.hw_version == TeslaHW_HW4) {
+        state_enter();
+        if (!g_state.das_hw4_status_seen)
+            fsd_handle_das_handsonly_399(&g_state, &frame);
+        fsd_handle_isa_speed_status(&g_state, &frame);
+        state_exit();
+    }
+    if (frame.id == CAN_ID_DI_SPEED) {
+        state_enter();
+        fsd_handle_di_speed(&g_state, &frame);
+        if (frame.dlc >= 4u) g_state.last_speed_tick_ms = now_ms;
+        state_exit();
+        return;
+    }
 
     // ── Beyond here only run when TX is allowed ───────────────────────────────
-    FSDState state = state_snapshot();
+    state = state_snapshot();
     bool tx = fsd_can_transmit(&state);
 
     // NAG killer — do not build the echo or mutate NAG accounting while TX is
@@ -597,36 +683,6 @@ static void process_frame(const CanFrame &frame) {
         if (modified && tx)
             send_can_frame_if_allowed(f);
         return;
-    }
-
-    // Auto-upgrade Legacy→HW3: Palladium S/X with HW3 reports das_hw=0
-    // (→Legacy) but actually uses 0x3FD. True Legacy never broadcasts 0x3FD.
-    if (state.hw_mode_auto && state.hw_version == TeslaHW_Legacy && saw_ap_control) {
-        apply_detected_hw(TeslaHW_HW3, "upgrade:Legacy→HW3(0x3FD seen)");
-        state = state_snapshot();
-    }
-
-    // Fallback HW detection when 0x398 is unavailable on the tapped bus.
-    // Delay 0x3FD→HW3 fallback to avoid misclassifying HW4 (which also has
-    // 0x3FD) before 0x399 arrives. 0x3EE and 0x399 are unambiguous.
-    static uint32_t hw_fallback_3fd_count = 0;
-    static TeslaHWVersion hw_fallback_last_hw = TeslaHW_Unknown;
-    if (state.hw_version != hw_fallback_last_hw) {
-        hw_fallback_3fd_count = 0;
-        hw_fallback_last_hw = state.hw_version;
-    }
-    if (state.hw_mode_auto && state.hw_version == TeslaHW_Unknown) {
-        if (frame.id == CAN_ID_AP_LEGACY) {
-            apply_detected_hw(TeslaHW_Legacy, "fallback:0x3EE");
-        } else if (frame.id == CAN_ID_ISA_SPEED) {
-            apply_detected_hw(TeslaHW_HW4, "fallback:0x399");
-            hw_fallback_3fd_count = 0;
-        } else if (saw_ap_control) {
-            hw_fallback_3fd_count++;
-            if (hw_fallback_3fd_count >= 50)
-                apply_detected_hw(TeslaHW_HW3, "fallback:0x3FD(confirmed)");
-        }
-        state = state_snapshot();
     }
 
     // ISA speed chime (0x399, HW4 only)
@@ -716,6 +772,7 @@ static void can_task(void *param) {
 
     while (true) {
         uint32_t now = millis();
+        g_can_task_heartbeat_ms = now;
 
         CanCommand command;
         while (xQueueReceive(g_can_command_queue, &command, 0) == pdTRUE) {
@@ -1111,11 +1168,15 @@ void loop() {
         (g_ota_verify_last_attempt_ms == 0 ||
          (now - g_ota_verify_last_attempt_ms) >= OTA_BOOT_VERIFY_RETRY_MS)) {
         FSDState state = state_snapshot();
-        // A non-zero CAN stack watermark proves the task reached its periodic
-        // diagnostics path instead of merely being created successfully.
-        if (g_can_task_handle != nullptr && state.can_driver_available &&
+        uint32_t can_heartbeat = g_can_task_heartbeat_ms;
+        bool can_task_fresh = g_can_task_handle != nullptr && can_heartbeat != 0u &&
+            (uint32_t)(now - can_heartbeat) <= OTA_HEARTBEAT_MAX_AGE_MS;
+        // The stack watermark proves the CAN task reached diagnostics at least
+        // once; the heartbeat freshness proves that evidence is not stale.
+        if (can_task_fresh && state.can_driver_available &&
             state.can_stack_free_words > 0 &&
-            (!g_web_runtime_expected || web_dashboard_healthy())) {
+            (!g_web_runtime_expected ||
+             web_dashboard_healthy(now, OTA_HEARTBEAT_MAX_AGE_MS))) {
             g_ota_verify_last_attempt_ms = now;
             if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
                 g_ota_pending_verify = false;

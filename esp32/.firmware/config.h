@@ -4,17 +4,19 @@
 #define CAN_ID_STW_ACTN_RQ    0x045u  // 69   - STW_ACTN_RQ:  steering stalk (Legacy follow distance)
 #define CAN_ID_TRIP_PLANNING  0x082u  // 130  - UI_tripPlanning: precondition trigger
 #define CAN_ID_BMS_HV_BUS     0x132u  // 306  - BMS_hvBusStatus: pack voltage / current
+#define CAN_ID_DI_SPEED       0x257u  // 599  - DI_speed: vehicle speed for Autopark TX release
 #define CAN_ID_BMS_SOC        0x292u  // 658  - BMS_socStatus:   state of charge
 #define CAN_ID_BMS_THERMAL    0x312u  // 786  - BMS_thermalStatus: battery temp
 #define CAN_ID_GTW_CAR_STATE  0x318u  // 792  - GTW_carState:    OTA detection
 #define CAN_ID_EPAS_STATUS    0x370u  // 880  - EPAS3P_sysStatus: nag killer target
 #define CAN_ID_GTW_CAR_CONFIG 0x398u  // 920  - GTW_carConfig:   HW version detection
-#define CAN_ID_ISA_SPEED      0x399u  // 921  - AutopilotStatus: speed limits / HW4 chime suppress
+#define CAN_ID_DAS_STATUS_HW3 0x399u  // 921  - DAS_status on Legacy/HW3
+#define CAN_ID_ISA_SPEED      0x399u  // 921  - ISA speed / HW4 chime suppress
 #define CAN_ID_AP_LEGACY      0x3EEu  // 1006 - DAS_autopilot:   Legacy / HW1 / HW2
 #define CAN_ID_FOLLOW_DIST    0x3F8u  // 1016 - DAS_followDistance: speed profile source
 #define CAN_ID_DAS_AP_CONFIG  0x331u  // 817  - DAS autopilot config (tier restore target, ~1 Hz)
 #define CAN_ID_AP_CONTROL     0x3FDu  // 1021 - DAS_autopilotControl: HW3 / HW4 core
-#define CAN_ID_DAS_STATUS     0x39Bu  // 923  - DAS_status: AP hands-on state (nag gating)
+#define CAN_ID_DAS_STATUS_HW4 0x39Bu  // 923  - DAS_status on HW4
 
 // ── GPIO ──────────────────────────────────────────────────────────────────────
 #if defined(BOARD_LILYGO)
@@ -68,6 +70,7 @@
 #define CAN_TX_ARM_RX_FRAMES       300u  // New valid RX frames required before TX
 #define OTA_BOOT_VERIFY_DELAY_MS  10000u // Healthy runtime required before accepting a new OTA image
 #define OTA_BOOT_VERIFY_RETRY_MS   5000u // Retry a transient partition-validation failure
+#define OTA_HEARTBEAT_MAX_AGE_MS   1000u // CAN/Web tasks must have run this recently
 
 // OTA detection hardening on GTW_carState (0x318)
 // Current vehicles may use byte 6 as a rolling counter.  Only raw value 2 is

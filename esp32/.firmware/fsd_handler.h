@@ -54,6 +54,7 @@ struct FSDState {
     bool           can_driver_available;
     bool           can_tx_armed;             // startup delay + live-RX threshold satisfied
     bool           tesla_ota_in_progress;   // pause TX during OTA
+    bool           autopark_tx_block;       // pause all TX during an in-car Autopark episode
     uint8_t        ota_raw_state;           // raw GTW_updateInProgress bits [1:0]
     uint8_t        ota_last_byte6;          // previous complete byte 6 (counter-vs-flag check)
     bool           ota_last_valid;          // ota_last_byte6 has been initialised
@@ -130,12 +131,23 @@ struct FSDState {
     uint8_t        das_vision_speed_lim;       // DAS_visionOnlySpeedLimit raw value, x5 = km/h
     uint8_t        das_speed_limit_active;     // selected valid limit raw value, x5 = km/h
 
-    // ── DAS status (0x39B) — nag killer gating ───────────────────────────────
+    // ── DAS status / Autopark ────────────────────────────────────────────────
     // 0=NOT_REQD, 8=SUSPENDED — both mean DAS is satisfied, skip echo.
     // das_seen starts false; if 0x39B is absent from the tapped bus the nag
     // killer falls back to EPAS-level-only gating (conservative echo).
     bool           das_seen;
+    bool           das_hw4_status_seen;
     uint8_t        das_hands_on_state;
+    uint8_t        das_ap_state;
+    bool           autopark_ready;
+    bool           autopark_parked;
+    bool           autopark_waiting_brake;
+    uint32_t       autopark_bit_last_ms;
+    uint8_t        autopark_prev_ap_state;
+    bool           autopark_episode;
+    float          vehicle_speed_kph;
+    bool           speed_seen;
+    uint32_t       last_speed_tick_ms;
 };
 
 // ── API ───────────────────────────────────────────────────────────────────────
@@ -201,5 +213,17 @@ bool fsd_handle_tlssc_restore(FSDState *state, CanFrame *frame);
 /** Parse AutopilotStatus / ISA speed (0x399) — updates HW4 speed-limit state. */
 void fsd_handle_isa_speed_status(FSDState *state, const CanFrame *frame);
 
-/** Parse DAS_status (0x39B) — updates das_hands_on_state for nag killer gating. */
-void fsd_handle_das_status(FSDState *state, const CanFrame *frame);
+/** Parse Legacy/HW3 DAS_status (0x399). */
+void fsd_handle_das_status_hw3(FSDState *state, const CanFrame *frame);
+
+/** Parse HW4 DAS_status (0x39B). */
+void fsd_handle_das_status_hw4(FSDState *state, const CanFrame *frame);
+
+/** Parse only the hands-on field from HW4 0x399 when 0x39B is absent. */
+void fsd_handle_das_handsonly_399(FSDState *state, const CanFrame *frame);
+
+/** Parse DI_speed (0x257), used to release false Autopark episodes. */
+void fsd_handle_di_speed(FSDState *state, const CanFrame *frame);
+
+/** Refresh the Autopark episode detector and global TX pause. */
+void fsd_autopark_update(FSDState *state, uint32_t now_ms);

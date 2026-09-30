@@ -257,6 +257,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 
 <!-- OTA Warning -->
 <div id="otaBanner" class="ota">&#9888;&#xFE0F; OTA UPDATE IN PROGRESS &mdash; CAN TX SUSPENDED</div>
+<div id="autoparkBanner" class="ota">&#9888;&#xFE0F; AUTOPARK ACTIVE &mdash; ALL CAN TX SUSPENDED</div>
 
 <!-- FSD Status -->
 <div class="card">
@@ -679,6 +680,8 @@ function upd(d){
   // OTA banner
   var otaB=document.getElementById('otaBanner');
   if(otaB) otaB.style.display=d.ota?'block':'none';
+  var autoparkB=document.getElementById('autoparkBanner');
+  if(autoparkB) autoparkB.style.display=d.autopark_block?'block':'none';
 
   // Mode button
   var act=d.op_mode===1;
@@ -1242,6 +1245,9 @@ static size_t build_json(char *out, size_t out_len) {
         JAPP("\"hw4_tier%u_percent\":%d,", i, (int)state.hw4_offset_tier_percent[i]);
     }
     JAPP("\"ota\":%s,", state.tesla_ota_in_progress ? "true" : "false");
+    JAPP("\"autopark_block\":%s,", state.autopark_tx_block ? "true" : "false");
+    JAPP("\"das_ap_state\":%u,", (unsigned)state.das_ap_state);
+    JAPP("\"vehicle_speed_kph\":%.1f,", state.vehicle_speed_kph);
     JAPP("\"nag_killer\":%s,", state.nag_killer ? "true" : "false");
     JAPP("\"bms_output\":%s,", state.bms_output ? "true" : "false");
     JAPP("\"force_fsd\":%s,", state.force_fsd ? "true" : "false");
@@ -1364,6 +1370,7 @@ static void ws_event(uint8_t num, WStype_t type,
             bool enabled = (strncmp(vptr, "true", 4) == 0);
             state_enter();
             g_state->nag_killer = enabled;
+            if (!enabled) g_state->nag_suppressed = false;
             saved = *g_state;
             state_exit();
             Serial.printf("[Web] NAG Killer: %s\n", enabled ? "ON" : "OFF");
@@ -1952,8 +1959,10 @@ static void web_server_task(void *param) {
     }
 }
 
-bool web_dashboard_healthy() {
-    return g_web_task_handle != nullptr && g_web_task_heartbeat != 0;
+bool web_dashboard_healthy(uint32_t now_ms, uint32_t max_age_ms) {
+    uint32_t heartbeat = g_web_task_heartbeat;
+    return g_web_task_handle != nullptr && heartbeat != 0u &&
+           (uint32_t)(now_ms - heartbeat) <= max_age_ms;
 }
 
 void web_dashboard_update() {

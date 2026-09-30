@@ -265,7 +265,21 @@ public:
         }
         MCP2515::ERROR err = enable ? mcp_.setListenOnlyMode() : mcp_.setNormalMode();
         if (err != MCP2515::ERROR_OK) {
-            return CanModeResult::SwitchFailedRolledBack;
+            // A failed mode command does not prove the controller stayed in
+            // its previous mode. Explicitly re-apply that mode and only report
+            // a rollback when the MCP2515 acknowledges it.
+            MCP2515::ERROR rollback_err = listen_only_
+                ? mcp_.setListenOnlyMode()
+                : mcp_.setNormalMode();
+            if (rollback_err == MCP2515::ERROR_OK)
+                return CanModeResult::SwitchFailedRolledBack;
+
+            // Neither the requested mode nor the rollback is trustworthy.
+            // Leave the controller unable to transmit and close the software
+            // driver gate until a later explicit restart succeeds.
+            if (mcp_.setConfigMode() != MCP2515::ERROR_OK) mcp_.reset();
+            ready_ = false;
+            return CanModeResult::SwitchFailedDriverDown;
         }
         listen_only_ = enable;
         return CanModeResult::Switched;
