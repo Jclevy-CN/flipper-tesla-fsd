@@ -41,7 +41,6 @@ static QueueHandle_t g_can_command_queue = nullptr;
 static CanDriver *g_can   = nullptr;
 static FSDState   g_state = {};
 static portMUX_TYPE g_state_mux = portMUX_INITIALIZER_UNLOCKED;
-static uint32_t g_can_start_ms = 0;
 static uint32_t g_can_tx_arm_start_ms = 0;
 static uint32_t g_can_tx_arm_rx_baseline = 0;
 static bool g_ota_pending_verify = false;
@@ -1030,48 +1029,6 @@ static void can_task(void *param) {
             last_temp_ms = now;
         }
 
-        // ── Startup CAN recovery: restart TWAI if RX stops advancing ──────────
-        static uint32_t last_recover_ms = 0;
-        static uint32_t last_recover_rx_count = 0;
-        static uint8_t startup_rx_ok_checks = 0;
-        static bool startup_recovery_done = false;
-        state_enter();
-        uint32_t rx_count = g_state.rx_count;
-        uint32_t twai_restart_count = g_state.twai_restart_count;
-        OpMode op_mode = g_state.op_mode;
-        state_exit();
-        if (last_recover_ms == 0) {
-            last_recover_ms = g_can_start_ms;
-            last_recover_rx_count = rx_count;
-        }
-        if (!startup_recovery_done &&
-            now >= (g_can_start_ms + TWAI_RECOVER_AFTER_MS) &&
-            (now - last_recover_ms) >= TWAI_RECOVER_AFTER_MS) {
-            if (rx_count == last_recover_rx_count) {
-                if (twai_restart_count < TWAI_RECOVER_MAX_ATTEMPTS) {
-                    FSDState recover_state = {};
-                    recover_state.op_mode = op_mode;
-                    bool ok = restart_can_driver_for_state(recover_state, "RX stalled after boot");
-                    state_enter();
-                    g_state.twai_restart_count++;
-                    state_exit();
-                    if (!ok) {
-                        led_set(LED_RED);
-                    }
-                } else {
-                    startup_recovery_done = true;
-                }
-            } else {
-                if (startup_rx_ok_checks < 3) startup_rx_ok_checks++;
-                if (startup_rx_ok_checks >= 3) {
-                    startup_recovery_done = true;
-                    Serial.println("[CAN] Startup RX checks passed — TWAI auto-recovery disabled");
-                }
-            }
-            last_recover_rx_count = rx_count;
-            last_recover_ms = now;
-        }
-
         // ── Precondition frame injection ──────────────────────────────────────
         // Keep the 1 ms path small. A full state copy is loaded lazily below
         // only when BMS or status output is actually due.
@@ -1281,7 +1238,6 @@ void setup() {
         }
     }
     g_state.can_driver_available = true;
-    g_can_start_ms = millis();
     reset_can_tx_arming();
 
     if (g_state.op_mode == OpMode_Active) {
