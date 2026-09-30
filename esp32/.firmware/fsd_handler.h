@@ -215,7 +215,7 @@ void fsd_build_precondition_frame(CanFrame *frame);
  *  Returns true if frame was modified and should be re-sent. */
 bool fsd_handle_tlssc_restore(FSDState *state, CanFrame *frame);
 
-/** Parse DAS fused/vision speed-limit fields (HW3 0x399 or HW4 0x39B). */
+/** Parse DAS fused/vision speed-limit fields from 0x399. */
 void fsd_handle_isa_speed_status(FSDState *state, const CanFrame *frame);
 
 /** Parse Legacy/HW3 DAS_status (0x399). */

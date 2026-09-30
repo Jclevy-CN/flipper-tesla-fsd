@@ -605,7 +605,7 @@ bool fsd_handle_tlssc_restore(FSDState *state, CanFrame *frame) {
     return true;
 }
 
-// ── DAS speed-limit fields — HW3 0x399 / HW4 0x39B ───────────────────
+// ── DAS speed-limit fields — 0x399 ───────────────────────────────────────────
 
 static bool fsd_valid_speed_limit_raw(uint8_t raw) {
     // DBC: 0 = UNKNOWN/SNA, 31 = NONE. Valid limits are 1..30 (5..150 km/h).

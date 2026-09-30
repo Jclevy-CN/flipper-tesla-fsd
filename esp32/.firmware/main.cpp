@@ -731,7 +731,6 @@ static void process_frame(const CanFrame &frame) {
         state_enter();
         before = g_state.autopark_tx_block;
         fsd_handle_das_status_hw4(&g_state, &frame);
-        fsd_handle_isa_speed_status(&g_state, &frame);
         g_state.das_status_fresh = true;
         g_state.last_das_status_ms = now_ms;
         fsd_autopark_update(&g_state, now_ms);
@@ -760,6 +759,10 @@ static void process_frame(const CanFrame &frame) {
     }
     if (frame.id == CAN_ID_ISA_SPEED && state.hw_version == TeslaHW_HW4) {
         state_enter();
+        // HW4 AP/Autopark state comes from 0x39B byte 0, but the speed-limit
+        // values used by percentage offset remain on the observed 0x399 ISA
+        // frame. Keep these two signal sources independent.
+        fsd_handle_isa_speed_status(&g_state, &frame);
         if (!g_state.das_hw4_status_seen)
             fsd_handle_das_handsonly_399(&g_state, &frame);
         state_exit();
