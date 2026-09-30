@@ -5,6 +5,7 @@
 #include "fsd_handler.h"
 
 using RestartPrepareCallback = void (*)();
+using DeviceOtaGateCallback = bool (*)(bool active);
 
 /**
  * web_dashboard.h — HTTP + WebSocket dashboard
@@ -28,7 +29,8 @@ using RestartPrepareCallback = void (*)();
  */
 void web_dashboard_init(FSDState *state, QueueHandle_t can_command_queue,
                         portMUX_TYPE *state_mux,
-                        RestartPrepareCallback prepare_restart);
+                        RestartPrepareCallback prepare_restart,
+                        DeviceOtaGateCallback device_ota_gate);
 
 /** True only when the Web task has produced a recent heartbeat. */
 bool web_dashboard_healthy(uint32_t now_ms, uint32_t max_age_ms);

@@ -72,6 +72,10 @@
 #define OTA_BOOT_VERIFY_DELAY_MS  10000u // Healthy runtime required before accepting a new OTA image
 #define OTA_BOOT_VERIFY_RETRY_MS   5000u // Retry a transient partition-validation failure
 #define OTA_HEARTBEAT_MAX_AGE_MS   1000u // CAN/Web tasks must have run this recently
+#define DAS_STATUS_MAX_AGE_MS      1000u // Stale DAS/Autopark context keeps related TX fail-closed
+#define SIGNAL_MAINTENANCE_MS        50u // Freshness/Autopark timeout service interval
+#define PREFS_SAVE_DEBOUNCE_MS      750u // Coalesce rapid UI setting changes before NVS writes
+#define CAN_TX_TIMEOUT_MS             1u // Bound CAN-task blocking when the TX queue is full
 
 // OTA detection hardening on GTW_carState (0x318)
 // Current vehicles may use byte 6 as a rolling counter.  Only raw value 2 is

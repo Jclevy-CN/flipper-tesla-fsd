@@ -53,8 +53,10 @@ static volatile uint32_t g_can_task_heartbeat_ms = 0;
 static void state_enter();
 static void state_exit();
 static void reset_can_tx_arming();
-static void clear_pending_transmit(const char *reason);
+static bool clear_pending_transmit(const char *reason);
 static void prepare_can_for_restart();
+static bool set_device_ota_gate(bool active);
+static bool restart_can_driver_for_state(const FSDState& state, const char *reason);
 
 #if defined(BOARD_WAVESHARE_S3)
 static bool g_chip_temp_ready = false;
@@ -177,6 +179,7 @@ struct LoopRuntimeSnapshot {
     bool bms_seen;
     OpMode op_mode;
     bool tesla_ota_in_progress;
+    bool device_ota_in_progress;
     bool autopark_tx_block;
     uint32_t rx_count;
     uint32_t sleep_idle_ms;
@@ -191,6 +194,7 @@ static LoopRuntimeSnapshot loop_runtime_snapshot() {
     s.bms_seen = g_state.bms_seen;
     s.op_mode = g_state.op_mode;
     s.tesla_ota_in_progress = g_state.tesla_ota_in_progress;
+    s.device_ota_in_progress = g_state.device_ota_in_progress;
     s.autopark_tx_block = g_state.autopark_tx_block;
     s.rx_count = g_state.rx_count;
     s.sleep_idle_ms = g_state.sleep_idle_ms;
@@ -207,17 +211,66 @@ static bool driver_transmit_gate(const CanFrame &frame) {
 }
 
 static void reset_can_tx_arming() {
+    uint32_t now = millis();
     state_enter();
     g_state.can_tx_armed = false;
     g_can_tx_arm_rx_baseline = g_state.rx_count;
+    g_can_tx_arm_start_ms = now;
     state_exit();
-    g_can_tx_arm_start_ms = millis();
 }
 
-static void clear_pending_transmit(const char *reason) {
+static bool clear_pending_transmit(const char *reason) {
     bool ok = g_can != nullptr && g_can->clearPendingTransmit();
+    if (!ok) {
+        // A failed purge cannot prove that no frame remains queued. Restarting
+        // the controller discards its TX queue and leaves the software gate in
+        // control; a failed restart marks the driver unavailable (fail-closed).
+        FSDState state = state_snapshot();
+        ok = restart_can_driver_for_state(state, "TX purge recovery");
+    }
     Serial.printf("[CAN] Pending TX clear %s (%s)\n", ok ? "OK" : "FAILED", reason);
     can_dump_log("TXQ clear %s (%s)", ok ? "OK" : "FAILED", reason);
+    return ok;
+}
+
+static void handle_autopark_block_transition(bool before, bool after,
+                                             const char *reason) {
+    if (before == after) return;
+    if (after) clear_pending_transmit(reason);
+    Serial.printf("[Autopark] TX %s\n", after ? "suspended" : "resumed");
+    can_dump_log("AUTOPARK TX %s", after ? "suspended" : "resumed");
+}
+
+static bool set_device_ota_gate(bool active) {
+    state_enter();
+    g_state.device_ota_in_progress = active;
+    state_exit();
+    // Every transition requires fresh time + traffic before TX can resume.
+    reset_can_tx_arming();
+
+    if (!active) return true;
+    if (g_can_command_queue != nullptr) {
+        uint32_t ignored_notification = 0;
+        xTaskNotifyWait(0, UINT32_MAX, &ignored_notification, 0);
+        CanCommand command = {
+            CanCommandType::ClearPendingTransmit,
+            OpMode_ListenOnly,
+            0,
+            xTaskGetCurrentTaskHandle()
+        };
+        if (xQueueSendToFront(g_can_command_queue, &command,
+                              pdMS_TO_TICKS(500)) != pdTRUE) {
+            Serial.println("[OTA] WARNING: could not queue pending-TX purge");
+            return false;
+        }
+        uint32_t purge_result = 0;
+        if (xTaskNotifyWait(0, UINT32_MAX, &purge_result,
+                            pdMS_TO_TICKS(1500)) == pdTRUE)
+            return purge_result == 1u;
+        Serial.println("[OTA] WARNING: pending-TX purge confirmation timed out");
+        return false;
+    }
+    return false;
 }
 
 static void prepare_can_for_restart() {
@@ -235,16 +288,29 @@ static void prepare_can_for_restart() {
     TaskHandle_t current = xTaskGetCurrentTaskHandle();
     if (g_can_task_handle != nullptr && current != g_can_task_handle &&
         g_can_command_queue != nullptr) {
+        uint32_t ignored_notification = 0;
+        xTaskNotifyWait(0, UINT32_MAX, &ignored_notification, 0);
         CanCommand command = {
             CanCommandType::ShutdownForRestart,
             OpMode_ListenOnly,
             0,
             current
         };
-        if (xQueueSendToFront(g_can_command_queue, &command, pdMS_TO_TICKS(500)) == pdTRUE &&
-            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1500)) > 0) {
-            Serial.println("[CAN] Controller stopped - bus released for restart");
-            return;
+        if (xQueueSendToFront(g_can_command_queue, &command,
+                              pdMS_TO_TICKS(500)) == pdTRUE) {
+            TickType_t wait_start = xTaskGetTickCount();
+            const TickType_t wait_limit = pdMS_TO_TICKS(1500);
+            while ((xTaskGetTickCount() - wait_start) < wait_limit) {
+                TickType_t elapsed = xTaskGetTickCount() - wait_start;
+                uint32_t notify_value = 0;
+                if (xTaskNotifyWait(0, UINT32_MAX, &notify_value,
+                                    wait_limit - elapsed) != pdTRUE)
+                    break;
+                if (notify_value == 3u) {
+                    Serial.println("[CAN] Controller stopped - bus released for restart");
+                    return;
+                }
+            }
         }
         Serial.println("[CAN] WARNING: orderly shutdown timed out; forcing shutdown");
         vTaskSuspend(g_can_task_handle);
@@ -539,7 +605,8 @@ static void update_led(const LoopRuntimeSnapshot &state) {
     }
     if (state.rx_count == 0 && millis() > WIRING_WARN_MS) {
         led_set(LED_RED);
-    } else if (state.tesla_ota_in_progress || state.autopark_tx_block) {
+    } else if (state.tesla_ota_in_progress || state.device_ota_in_progress ||
+               state.autopark_tx_block) {
         led_set(LED_YELLOW);
     } else if (state.op_mode == OpMode_Active) {
         led_set(LED_GREEN);
@@ -558,13 +625,8 @@ static void process_frame(const CanFrame &frame) {
     bool saw_bms_thermal = false;
 
     uint32_t now_ms = millis();
-    bool autopark_block_before;
-    bool autopark_block_after;
     state_enter();
     g_state.rx_count++;
-    autopark_block_before = g_state.autopark_tx_block;
-    fsd_autopark_update(&g_state, now_ms);
-    autopark_block_after = g_state.autopark_tx_block;
     if (frame.id == CAN_ID_GTW_CAR_STATE)  { g_state.seen_gtw_car_state++;  saw_gtw_car_state = true; }
     if (frame.id == CAN_ID_GTW_CAR_CONFIG) { g_state.seen_gtw_car_config++; saw_gtw_car_config = true; }
     if (frame.id == CAN_ID_AP_CONTROL)     { g_state.seen_ap_control++;     saw_ap_control = true; }
@@ -572,11 +634,6 @@ static void process_frame(const CanFrame &frame) {
     if (frame.id == CAN_ID_BMS_SOC)        { g_state.seen_bms_soc++;        saw_bms_soc = true; }
     if (frame.id == CAN_ID_BMS_THERMAL)    { g_state.seen_bms_thermal++;    saw_bms_thermal = true; }
     state_exit();
-
-    if (autopark_block_before != autopark_block_after) {
-        Serial.printf("[Autopark] TX %s\n", autopark_block_after ? "suspended" : "resumed");
-        can_dump_log("AUTOPARK TX %s", autopark_block_after ? "suspended" : "resumed");
-    }
 
     can_dump_record(frame);
 #if defined(BOARD_LILYGO)
@@ -668,31 +725,58 @@ static void process_frame(const CanFrame &frame) {
     }
 
     // DAS status is read-only but layout differs by hardware generation.
-    if (frame.id == CAN_ID_DAS_STATUS_HW4 && state.hw_version == TeslaHW_HW4) {
+    if (frame.id == CAN_ID_DAS_STATUS_HW4 && state.hw_version == TeslaHW_HW4 &&
+        frame.dlc == 8u) {
+        bool before;
+        bool after;
         state_enter();
+        before = g_state.autopark_tx_block;
         fsd_handle_das_status_hw4(&g_state, &frame);
+        fsd_handle_isa_speed_status(&g_state, &frame);
+        g_state.das_status_fresh = true;
+        g_state.last_das_status_ms = now_ms;
+        fsd_autopark_update(&g_state, now_ms);
+        after = g_state.autopark_tx_block;
         state_exit();
+        handle_autopark_block_transition(before, after,
+                                         "Autopark/DAS block entered");
         return;
     }
-    if (frame.id == CAN_ID_DAS_STATUS_HW3 && hw_uses_hw3_das_status(state.hw_version)) {
+    if (frame.id == CAN_ID_DAS_STATUS_HW3 &&
+        hw_uses_hw3_das_status(state.hw_version) && frame.dlc == 8u) {
+        bool before;
+        bool after;
         state_enter();
+        before = g_state.autopark_tx_block;
         fsd_handle_das_status_hw3(&g_state, &frame);
+        g_state.das_status_fresh = true;
+        g_state.last_das_status_ms = now_ms;
         fsd_handle_isa_speed_status(&g_state, &frame);
+        fsd_autopark_update(&g_state, now_ms);
+        after = g_state.autopark_tx_block;
         state_exit();
+        handle_autopark_block_transition(before, after,
+                                         "Autopark/DAS block entered");
         return;
     }
     if (frame.id == CAN_ID_ISA_SPEED && state.hw_version == TeslaHW_HW4) {
         state_enter();
         if (!g_state.das_hw4_status_seen)
             fsd_handle_das_handsonly_399(&g_state, &frame);
-        fsd_handle_isa_speed_status(&g_state, &frame);
         state_exit();
     }
     if (frame.id == CAN_ID_DI_SPEED) {
+        bool before;
+        bool after;
         state_enter();
+        before = g_state.autopark_tx_block;
         fsd_handle_di_speed(&g_state, &frame);
         if (frame.dlc >= 4u) g_state.last_speed_tick_ms = now_ms;
+        fsd_autopark_update(&g_state, now_ms);
+        after = g_state.autopark_tx_block;
         state_exit();
+        handle_autopark_block_transition(before, after,
+                                         "Autopark speed gate entered");
         return;
     }
 
@@ -835,9 +919,15 @@ static void can_task(void *param) {
         while (xQueueReceive(g_can_command_queue, &command, 0) == pdTRUE) {
             if (command.type == CanCommandType::SetMode) {
                 apply_can_mode(command.requested_mode, command.request_id, "Web");
+            } else if (command.type == CanCommandType::ClearPendingTransmit) {
+                bool ok = clear_pending_transmit("device OTA started");
+                if (command.reply_task != nullptr)
+                    xTaskNotify(command.reply_task, ok ? 1u : 2u,
+                                eSetValueWithOverwrite);
             } else if (command.type == CanCommandType::ShutdownForRestart) {
                 if (g_can != nullptr) g_can->shutdown();
-                if (command.reply_task != nullptr) xTaskNotifyGive(command.reply_task);
+                if (command.reply_task != nullptr)
+                    xTaskNotify(command.reply_task, 3u, eSetValueWithOverwrite);
                 // The requesting task will restart the chip. Do not touch the
                 // stopped controller again in the meantime.
                 vTaskSuspend(nullptr);
@@ -862,6 +952,7 @@ static void can_task(void *param) {
             g_state.rx_overrun_count = stats.rx_overrun;
             g_state.rx_rejected_count = stats.rx_rejected;
             g_state.tx_invalid_count = stats.tx_invalid;
+            g_state.tx_timeout_count = stats.tx_timeouts;
             g_state.rx_queue_pending = stats.rx_pending;
             g_state.tx_queue_pending = stats.tx_pending;
             g_state.rx_queue_peak = stats.rx_queue_peak;
@@ -891,11 +982,29 @@ static void can_task(void *param) {
             reset_can_tx_arming();
         }
 
+        // Expire safety/control inputs independently of frame arrival order.
+        static uint32_t last_signal_maintenance_ms = 0;
+        if ((now - last_signal_maintenance_ms) >= SIGNAL_MAINTENANCE_MS) {
+            bool before;
+            bool after;
+            state_enter();
+            before = g_state.autopark_tx_block;
+            fsd_expire_signal_state(&g_state, now);
+            fsd_autopark_update(&g_state, now);
+            after = g_state.autopark_tx_block;
+            state_exit();
+            handle_autopark_block_transition(before, after,
+                                             "DAS freshness expired");
+            last_signal_maintenance_ms = now;
+        }
+
         // Re-arm after each controller start only when both time and sustained
         // live-traffic requirements have been met. Other TX gates remain in force.
         uint32_t arm_check_ms = millis();
         state_enter();
         bool arm_now = !g_state.can_tx_armed &&
+            !g_state.tesla_ota_in_progress &&
+            !g_state.device_ota_in_progress &&
             (arm_check_ms - g_can_tx_arm_start_ms) >= CAN_TX_ARM_DELAY_MS &&
             (g_state.rx_count - g_can_tx_arm_rx_baseline) >= CAN_TX_ARM_RX_FRAMES;
         if (arm_now) g_state.can_tx_armed = true;
@@ -1206,7 +1315,7 @@ void setup() {
     if (wifi_ap_init(&g_state)) {
         g_web_runtime_expected = true;
         web_dashboard_init(&g_state, g_can_command_queue, &g_state_mux,
-                           prepare_can_for_restart);
+                           prepare_can_for_restart, set_device_ota_gate);
     }
 
     // ── Create CAN task pinned to Core 1 ──────────────────────────────────────
@@ -1232,6 +1341,7 @@ void setup() {
 
 // ── loop ──────────────────────────────────────────────────────────────────────
 void loop() {
+    prefs_tick();
     uint32_t now = millis();
     if (g_ota_pending_verify &&
         (now - g_ota_verify_start_ms) >= OTA_BOOT_VERIFY_DELAY_MS &&

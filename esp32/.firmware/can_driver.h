@@ -8,6 +8,7 @@ struct CanErrorStats {
     uint32_t rx_overrun;
     uint32_t rx_rejected;
     uint32_t tx_invalid;
+    uint32_t tx_timeouts;
     uint32_t rx_pending;
     uint32_t tx_pending;
     uint32_t rx_queue_peak;
@@ -72,6 +73,9 @@ public:
 
     /** Discard frames already waiting in the controller's transmit queue. */
     virtual bool clearPendingTransmit() = 0;
+
+    /** Whether the controller remains usable after the most recent operation. */
+    virtual bool isAvailable() const = 0;
 
     /** Stop the controller and leave it unable to TX or ACK before reset. */
     virtual void shutdown() = 0;

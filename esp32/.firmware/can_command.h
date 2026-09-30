@@ -5,6 +5,7 @@
 
 enum class CanCommandType : uint8_t {
     SetMode,
+    ClearPendingTransmit,
     ShutdownForRestart
 };
 

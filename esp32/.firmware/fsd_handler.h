@@ -38,6 +38,7 @@ struct FSDState {
     uint32_t       frames_sent;     // frames successfully sent by CAN driver
     uint32_t       tx_fail_count;   // invalid/unavailable/hardware TX failures
     uint32_t       tx_gated_count;  // intentional safety-gate TX rejections
+    uint32_t       tx_timeout_count;// TWAI TX queue timeouts
     char           web_debug_log[224]; // latest debug line for Web UI log window
 
     // ── Feature flags (runtime-toggleable) ───────────────────────────────────
@@ -55,6 +56,7 @@ struct FSDState {
     bool           can_driver_available;
     bool           can_tx_armed;             // startup delay + live-RX threshold satisfied
     bool           tesla_ota_in_progress;   // pause TX during OTA
+    bool           device_ota_in_progress;  // pause TX while flashing this ESP32
     bool           autopark_tx_block;       // pause all TX during an in-car Autopark episode
     uint8_t        ota_raw_state;           // raw GTW_updateInProgress bits [1:0]
     uint8_t        ota_last_byte6;          // previous complete byte 6 (counter-vs-flag check)
@@ -138,6 +140,8 @@ struct FSDState {
     // killer falls back to EPAS-level-only gating (conservative echo).
     bool           das_seen;
     bool           das_hw4_status_seen;
+    bool           das_status_fresh;           // complete DAS context received within 1 second
+    uint32_t       last_das_status_ms;
     uint8_t        das_hands_on_state;
     uint8_t        das_ap_state;
     bool           autopark_ready;
@@ -211,7 +215,7 @@ void fsd_build_precondition_frame(CanFrame *frame);
  *  Returns true if frame was modified and should be re-sent. */
 bool fsd_handle_tlssc_restore(FSDState *state, CanFrame *frame);
 
-/** Parse AutopilotStatus / ISA speed (0x399) — updates HW4 speed-limit state. */
+/** Parse DAS fused/vision speed-limit fields (HW3 0x399 or HW4 0x39B). */
 void fsd_handle_isa_speed_status(FSDState *state, const CanFrame *frame);
 
 /** Parse Legacy/HW3 DAS_status (0x399). */
@@ -228,3 +232,6 @@ void fsd_handle_di_speed(FSDState *state, const CanFrame *frame);
 
 /** Refresh the Autopark episode detector and global TX pause. */
 void fsd_autopark_update(FSDState *state, uint32_t now_ms);
+
+/** Mark stale DAS/Autopark context unknown and keep dependent TX fail-closed. */
+void fsd_expire_signal_state(FSDState *state, uint32_t now_ms);

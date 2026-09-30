@@ -15,9 +15,14 @@
 /** Load saved settings into *state.  No-op if no saved state exists yet. */
 void prefs_load(FSDState *state);
 
-/** Persist all runtime-toggleable fields from *state to NVS.
- *  Call after every user-initiated toggle (button or web dashboard). */
+/** Queue a debounced, serialized settings save. */
 void prefs_save(const FSDState *state);
+
+/** Service a pending save; call periodically from the Arduino loop. */
+void prefs_tick();
+
+/** Immediately commit the newest pending snapshot (used before restart). */
+void prefs_flush();
 
 /** Erase all saved settings from NVS (factory reset). */
 void prefs_clear();

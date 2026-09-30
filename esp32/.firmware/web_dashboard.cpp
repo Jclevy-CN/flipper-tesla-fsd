@@ -32,6 +32,7 @@ static FSDState     *g_state     = nullptr;   // shared with main
 static portMUX_TYPE *g_state_mux = nullptr;   // owned by main
 static QueueHandle_t g_can_command_queue = nullptr;
 static RestartPrepareCallback g_prepare_restart = nullptr;
+static DeviceOtaGateCallback g_device_ota_gate = nullptr;
 static uint32_t      g_can_request_id = 0;
 
 static WebServer        g_http(80);
@@ -257,7 +258,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
 
 <!-- OTA Warning -->
 <div id="otaBanner" class="ota">&#9888;&#xFE0F; OTA UPDATE IN PROGRESS &mdash; CAN TX SUSPENDED</div>
-<div id="autoparkBanner" class="ota">&#9888;&#xFE0F; AUTOPARK ACTIVE &mdash; ALL CAN TX SUSPENDED</div>
+<div id="autoparkBanner" class="ota"></div>
 
 <!-- FSD Status -->
 <div class="card">
@@ -324,6 +325,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <div class="sb"><div class="sv" id="txSent">0</div><div class="sl">TX Sent</div></div>
     <div class="sb"><div class="sv" id="txFail">0</div><div class="sl">TX Failed</div></div>
     <div class="sb"><div class="sv" id="txGated">0</div><div class="sl">TX Gated</div></div>
+    <div class="sb"><div class="sv" id="txTimeout">0</div><div class="sl">TX Timeouts</div></div>
     <div class="sb"><div class="sv" id="rxMissed">0</div><div class="sl">RX Missed</div></div>
     <div class="sb"><div class="sv" id="busErr">0</div><div class="sl">Bus Errors</div></div>
     <div class="sb"><div class="sv" id="rxOverrun">0</div><div class="sl">RX Overrun</div></div>
@@ -682,7 +684,14 @@ function upd(d){
   var otaB=document.getElementById('otaBanner');
   if(otaB) otaB.style.display=d.ota?'block':'none';
   var autoparkB=document.getElementById('autoparkBanner');
-  if(autoparkB) autoparkB.style.display=d.autopark_block?'block':'none';
+  if(autoparkB){
+    autoparkB.style.display=d.autopark_block?'block':'none';
+    if(d.autopark_block){
+      autoparkB.innerHTML=d.das_status_fresh
+        ?'&#9888;&#xFE0F; AUTOPARK ACTIVE &mdash; ALL CAN TX SUSPENDED'
+        :'&#9888;&#xFE0F; DAS STATUS UNKNOWN &mdash; ALL CAN TX SUSPENDED';
+    }
+  }
 
   // Mode button
   var act=d.op_mode===1;
@@ -800,6 +809,7 @@ function upd(d){
   if(document.getElementById('txSent')) document.getElementById('txSent').textContent=(d.tx_sent||0).toLocaleString();
   if(document.getElementById('txFail')) document.getElementById('txFail').textContent=(d.tx_failed||0).toLocaleString();
   if(document.getElementById('txGated')) document.getElementById('txGated').textContent=(d.tx_gated||0).toLocaleString();
+  if(document.getElementById('txTimeout')) document.getElementById('txTimeout').textContent=(d.tx_timeouts||0).toLocaleString();
   if(document.getElementById('rxMissed')) document.getElementById('rxMissed').textContent=(d.rx_missed||0).toLocaleString();
   if(document.getElementById('busErr')) document.getElementById('busErr').textContent=(d.bus_errors||0).toLocaleString();
   if(document.getElementById('rxOverrun')) document.getElementById('rxOverrun').textContent=(d.rx_overrun||0).toLocaleString();
@@ -1165,14 +1175,16 @@ static bool json_append_escaped(char *&p, char *end, const char *s) {
 }
 
 // ── JSON builder ──────────────────────────────────────────────────────────────
-static size_t build_json(char *out, size_t out_len) {
+static size_t build_json(char *out, size_t out_len,
+                         const FSDState *provided_state = nullptr) {
     if (out == nullptr || out_len == 0) return 0;
 
-    FSDState state;
-    if (!state_copy(&state)) {
+    FSDState copied_state;
+    if (provided_state == nullptr && !state_copy(&copied_state)) {
         snprintf(out, out_len, "{}");
         return strlen(out);
     }
+    const FSDState &state = provided_state != nullptr ? *provided_state : copied_state;
 
     uint32_t uptime_s = (millis() - g_start_ms) / 1000;
     bool can_vehicle_detected = false;
@@ -1247,7 +1259,9 @@ static size_t build_json(char *out, size_t out_len) {
         JAPP("\"hw4_tier%u_percent\":%d,", i, (int)state.hw4_offset_tier_percent[i]);
     }
     JAPP("\"ota\":%s,", state.tesla_ota_in_progress ? "true" : "false");
+    JAPP("\"device_ota\":%s,", state.device_ota_in_progress ? "true" : "false");
     JAPP("\"autopark_block\":%s,", state.autopark_tx_block ? "true" : "false");
+    JAPP("\"das_status_fresh\":%s,", state.das_status_fresh ? "true" : "false");
     JAPP("\"das_ap_state\":%u,", (unsigned)state.das_ap_state);
     JAPP("\"vehicle_speed_kph\":%.1f,", state.vehicle_speed_kph);
     JAPP("\"nag_killer\":%s,", state.nag_killer ? "true" : "false");
@@ -1266,6 +1280,7 @@ static size_t build_json(char *out, size_t out_len) {
     JAPP("\"tx_sent\":%lu,", (unsigned long)state.frames_sent);
     JAPP("\"tx_failed\":%lu,", (unsigned long)state.tx_fail_count);
     JAPP("\"tx_gated\":%lu,", (unsigned long)state.tx_gated_count);
+    JAPP("\"tx_timeouts\":%lu,", (unsigned long)state.tx_timeout_count);
     JAPP("\"debug_log\":\"");
     json_append_escaped(p, end, state.web_debug_log);
     JAPP("\",");
@@ -1723,6 +1738,7 @@ static void ws_event(uint8_t num, WStype_t type,
             Serial.printf("[Web] WiFi config: SSID=\"%s\" PASS=*** HIDDEN=%d\n",
                 saved.wifi_ssid, saved.wifi_hidden);
             prefs_save(&saved);
+            prefs_flush();
             if (g_prepare_restart != nullptr) g_prepare_restart();
             delay(500);
             ESP.restart();
@@ -1765,6 +1781,7 @@ static void handle_sdformat() {
 
 static void handle_restart() {
     g_http.send(200, "text/plain", "OK");
+    prefs_flush();
     if (g_prepare_restart != nullptr) g_prepare_restart();
     delay(500);
     ESP.restart();
@@ -1803,6 +1820,13 @@ static void handle_ota_upload() {
             return;
         }
 
+        if (g_device_ota_gate == nullptr || !g_device_ota_gate(true)) {
+            Serial.println("[OTA] ERROR: Could not confirm pending-TX purge");
+            Update.abort();
+            ota_error_flag = true;
+            if (g_device_ota_gate != nullptr) g_device_ota_gate(false);
+            return;
+        }
         Serial.println("[OTA] Update started successfully");
     } else if (upload.status == UPLOAD_FILE_WRITE) {
         if (ota_error_flag) return;
@@ -1813,6 +1837,7 @@ static void handle_ota_upload() {
             Serial.printf("[OTA] ERROR: Write failed, expected %u, wrote %u\n",
                 upload.currentSize, (unsigned)written);
             ota_error_flag = true;
+            if (g_device_ota_gate != nullptr) g_device_ota_gate(false);
             return;
         }
 
@@ -1824,6 +1849,7 @@ static void handle_ota_upload() {
         if (ota_error_flag) {
             Serial.println("[OTA] Upload aborted due to previous error");
             Update.abort();
+            if (g_device_ota_gate != nullptr) g_device_ota_gate(false);
             return;
         }
 
@@ -1837,11 +1863,13 @@ static void handle_ota_upload() {
             Update.printError(Serial);
             Serial.println("[OTA] ERROR: Update.end() failed");
             ota_error_flag = true;
+            if (g_device_ota_gate != nullptr) g_device_ota_gate(false);
         }
     } else if (upload.status == UPLOAD_FILE_ABORTED) {
         Serial.println("[OTA] Upload aborted by client");
         Update.abort();
         ota_error_flag = true;
+        if (g_device_ota_gate != nullptr) g_device_ota_gate(false);
     }
 }
 
@@ -1857,6 +1885,7 @@ static void handle_ota_done() {
         Serial.printf("[OTA] %s\n", error_msg.c_str());
         g_http.send(500, "text/plain", error_msg);
         Update.abort();
+        if (g_device_ota_gate != nullptr) g_device_ota_gate(false);
         return;
     }
 
@@ -1873,11 +1902,13 @@ static void handle_ota_done() {
 // ── Public API ────────────────────────────────────────────────────────────────
 void web_dashboard_init(FSDState *state, QueueHandle_t can_command_queue,
                         portMUX_TYPE *state_mux,
-                        RestartPrepareCallback prepare_restart) {
+                        RestartPrepareCallback prepare_restart,
+                        DeviceOtaGateCallback device_ota_gate) {
     g_state       = state;
     g_state_mux   = state_mux;
     g_can_command_queue = can_command_queue;
     g_prepare_restart = prepare_restart;
+    g_device_ota_gate = device_ota_gate;
     g_start_ms    = millis();
     g_last_fps_ms = millis();
     FSDState initial_state;
@@ -1951,7 +1982,7 @@ static void web_server_task(void *param) {
                 g_last_fps_ms = now;
 
                 if (g_ws.connectedClients(false) > 0) {
-                    size_t len = build_json(g_json_buf, sizeof(g_json_buf));
+                    size_t len = build_json(g_json_buf, sizeof(g_json_buf), &state);
                     g_ws.broadcastTXT(g_json_buf, len);
                     taskYIELD();
                 }

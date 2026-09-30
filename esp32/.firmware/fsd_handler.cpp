@@ -118,15 +118,17 @@ void fsd_apply_hw_version(FSDState *state, TeslaHWVersion hw) {
         state->hw4_offset_active = 0;
         state->das_seen = false;
         state->das_hw4_status_seen = false;
+        state->das_status_fresh = false;
         state->das_ap_state = 0;
         state->das_hands_on_state = 0;
+        state->last_das_status_ms = 0;
         state->autopark_ready = false;
         state->autopark_parked = false;
         state->autopark_waiting_brake = false;
         state->autopark_bit_last_ms = 0;
         state->autopark_prev_ap_state = 0;
         state->autopark_episode = false;
-        state->autopark_tx_block = false;
+        state->autopark_tx_block = hw == TeslaHW_HW3 || hw == TeslaHW_HW4;
     }
     if (!state->profile_mode_auto) {
         uint8_t max_profile = max_speed_profile_for_hw(hw);
@@ -151,6 +153,7 @@ bool fsd_can_transmit(const FSDState *state) {
     if (!state->can_tx_armed)                return false;
     if (state->op_mode == OpMode_ListenOnly) return false;
     if (state->tesla_ota_in_progress)        return false;
+    if (state->device_ota_in_progress)       return false;
     if (state->autopark_tx_block)            return false;
     return true;
 }
@@ -190,12 +193,14 @@ void fsd_handle_gtw_car_state(FSDState *state, const CanFrame *frame) {
     uint8_t raw = byte6 & 0x03u;
     state->ota_raw_state = raw;
 
-    bool stable_installing =
-        raw == OTA_IN_PROGRESS_RAW_VALUE &&
-        state->ota_last_valid &&
-        byte6 == state->ota_last_byte6;
-    if (stable_installing) {
-        if (state->ota_assert_count < 255u) state->ota_assert_count++;
+    bool installing = raw == OTA_IN_PROGRESS_RAW_VALUE;
+    if (installing) {
+        if (state->ota_last_valid && byte6 == state->ota_last_byte6) {
+            if (state->ota_assert_count < 255u) state->ota_assert_count++;
+        } else {
+            // This is the first sample in a new full-byte-stable sequence.
+            state->ota_assert_count = 1u;
+        }
         state->ota_clear_count = 0;
         if (state->ota_assert_count >= OTA_ASSERT_FRAMES)
             state->tesla_ota_in_progress = true;
@@ -598,7 +603,7 @@ bool fsd_handle_tlssc_restore(FSDState *state, CanFrame *frame) {
     return true;
 }
 
-// ── AutopilotStatus / ISA speed (0x399) — HW4 speed-limit source ─────────────
+// ── DAS speed-limit fields — HW3 0x399 / HW4 0x39B ───────────────────
 
 static bool fsd_valid_speed_limit_raw(uint8_t raw) {
     // DBC: 0 = UNKNOWN/SNA, 31 = NONE. Valid limits are 1..30 (5..150 km/h).
@@ -663,6 +668,12 @@ void fsd_handle_di_speed(FSDState *state, const CanFrame *frame) {
 }
 
 void fsd_autopark_update(FSDState *state, uint32_t now_ms) {
+    if ((state->hw_version == TeslaHW_HW3 || state->hw_version == TeslaHW_HW4) &&
+        !state->das_status_fresh) {
+        state->autopark_tx_block = true;
+        return;
+    }
+
     const uint8_t active_fsd = 6u;
     bool any_bit = state->autopark_ready || state->autopark_parked ||
                    state->autopark_waiting_brake;
@@ -686,4 +697,14 @@ void fsd_autopark_update(FSDState *state, uint32_t now_ms) {
                    state->vehicle_speed_kph <= 284.96f;
     state->autopark_tx_block = state->autopark_episode && !driving;
     state->autopark_prev_ap_state = state->das_ap_state;
+}
+
+void fsd_expire_signal_state(FSDState *state, uint32_t now_ms) {
+    if (state->das_status_fresh &&
+        (uint32_t)(now_ms - state->last_das_status_ms) > DAS_STATUS_MAX_AGE_MS) {
+        // Retain the last decoded values for diagnostics, but no longer trust
+        // them. Unknown Autopark state must not be interpreted as inactive.
+        state->das_status_fresh = false;
+        state->autopark_tx_block = true;
+    }
 }

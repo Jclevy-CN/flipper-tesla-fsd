@@ -1,14 +1,36 @@
 #include "prefs.h"
 #include <Preferences.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 static Preferences g_prefs;
 static const char *NS = "fsd";
+static SemaphoreHandle_t g_prefs_io_mutex = nullptr;
+static portMUX_TYPE g_pending_mux = portMUX_INITIALIZER_UNLOCKED;
+static FSDState g_pending_state = {};
+static bool g_save_pending = false;
+static uint32_t g_save_due_ms = 0;
+
+static void ensure_io_mutex() {
+    if (g_prefs_io_mutex == nullptr) g_prefs_io_mutex = xSemaphoreCreateMutex();
+}
+
+static void io_lock() {
+    ensure_io_mutex();
+    if (g_prefs_io_mutex != nullptr) xSemaphoreTake(g_prefs_io_mutex, portMAX_DELAY);
+}
+
+static void io_unlock() {
+    if (g_prefs_io_mutex != nullptr) xSemaphoreGive(g_prefs_io_mutex);
+}
 
 void prefs_load(FSDState *state) {
+    io_lock();
     g_prefs.begin(NS, /*readOnly=*/true);
     if (!g_prefs.isKey("ok")) {
         Serial.println("[NVS] No saved settings found (first boot)");
         g_prefs.end();
+        io_unlock();
         return;
     }
     state->nag_killer               = g_prefs.getBool("nag",    true);
@@ -76,16 +98,23 @@ void prefs_load(FSDState *state) {
                   state->sleep_idle_ms,
                   state->wifi_ssid, state->wifi_hidden);
     g_prefs.end();
+    io_unlock();
 }
 
 void prefs_clear() {
+    portENTER_CRITICAL(&g_pending_mux);
+    g_save_pending = false;
+    portEXIT_CRITICAL(&g_pending_mux);
+    io_lock();
     g_prefs.begin(NS, /*readOnly=*/false);
     g_prefs.clear();
     g_prefs.end();
+    io_unlock();
     Serial.println("[NVS] All settings erased — factory reset");
 }
 
-void prefs_save(const FSDState *state) {
+static void prefs_write_snapshot(const FSDState *state) {
+    io_lock();
     g_prefs.begin(NS, /*readOnly=*/false);
     g_prefs.putBool("ok",     true);
     g_prefs.putBool("nag",    state->nag_killer);
@@ -139,4 +168,38 @@ void prefs_save(const FSDState *state) {
                   state->sleep_idle_ms,
                   state->wifi_ssid, state->wifi_hidden);
     g_prefs.end();
+    io_unlock();
+}
+
+void prefs_save(const FSDState *state) {
+    if (state == nullptr) return;
+    uint32_t due = millis() + PREFS_SAVE_DEBOUNCE_MS;
+    portENTER_CRITICAL(&g_pending_mux);
+    g_pending_state = *state;
+    g_save_due_ms = due;
+    g_save_pending = true;
+    portEXIT_CRITICAL(&g_pending_mux);
+}
+
+static bool take_pending_snapshot(FSDState *out, bool force) {
+    bool ready = false;
+    uint32_t now = millis();
+    portENTER_CRITICAL(&g_pending_mux);
+    if (g_save_pending && (force || (int32_t)(now - g_save_due_ms) >= 0)) {
+        *out = g_pending_state;
+        g_save_pending = false;
+        ready = true;
+    }
+    portEXIT_CRITICAL(&g_pending_mux);
+    return ready;
+}
+
+void prefs_tick() {
+    FSDState state;
+    if (take_pending_snapshot(&state, false)) prefs_write_snapshot(&state);
+}
+
+void prefs_flush() {
+    FSDState state;
+    if (take_pending_snapshot(&state, true)) prefs_write_snapshot(&state);
 }

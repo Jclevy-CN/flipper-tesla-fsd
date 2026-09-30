@@ -24,6 +24,7 @@ class TwaiDriver : public CanDriver {
     bool     recovering_  = false;
     uint32_t rx_rejected_ = 0;
     uint32_t tx_invalid_  = 0;
+    uint32_t tx_timeouts_ = 0;
     uint32_t rx_queue_peak_ = 0;
     uint32_t tx_queue_peak_ = 0;
 
@@ -75,10 +76,10 @@ public:
         msg.identifier       = frame.id;
         msg.data_length_code = frame.dlc;
         memcpy(msg.data, frame.data, frame.dlc);
-        // 5 ms TX timeout — short enough to not stall the main loop
-        return twai_transmit(&msg, pdMS_TO_TICKS(5)) == ESP_OK
-            ? CanSendResult::Sent
-            : CanSendResult::Failed;
+        // Bounded TX timeout; configured short enough not to stall the CAN task.
+        esp_err_t err = twai_transmit(&msg, pdMS_TO_TICKS(CAN_TX_TIMEOUT_MS));
+        if (err == ESP_ERR_TIMEOUT) tx_timeouts_++;
+        return err == ESP_OK ? CanSendResult::Sent : CanSendResult::Failed;
     }
 
     bool receive(CanFrame &frame) override {
@@ -110,6 +111,7 @@ public:
         stats.rx_overrun = info.rx_overrun_count;
         stats.rx_rejected = rx_rejected_;
         stats.tx_invalid = tx_invalid_;
+        stats.tx_timeouts = tx_timeouts_;
         stats.rx_pending = info.msgs_to_rx;
         stats.tx_pending = info.msgs_to_tx;
         if (info.msgs_to_rx > rx_queue_peak_) rx_queue_peak_ = info.msgs_to_rx;
@@ -163,6 +165,8 @@ public:
     bool clearPendingTransmit() override {
         return installed_ && twai_clear_transmit_queue() == ESP_OK;
     }
+
+    bool isAvailable() const override { return installed_; }
 
     void shutdown() override {
         stop_and_uninstall();
@@ -299,6 +303,8 @@ public:
         // reinitialisation guarantees that all TXREQ slots are discarded.
         return begin(listen_only_);
     }
+
+    bool isAvailable() const override { return ready_; }
 
     void shutdown() override {
         if (!ready_) return;
