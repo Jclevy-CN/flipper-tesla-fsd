@@ -64,8 +64,8 @@
 #define STATUS_PRINT_MS       5000u   // Periodic status line when Active
 #define TWAI_RECOVER_AFTER_MS 10000u   // Restart TWAI once CAN stays silent after boot
 #define TWAI_RECOVER_MAX_ATTEMPTS 3u   // Avoid endless restart loops on real wiring faults
-#define CAN_TX_ARM_DELAY_MS       15000u // Minimum delay after CAN (re)initialisation
-#define CAN_TX_ARM_RX_FRAMES      1000u  // New valid RX frames required before TX
+#define CAN_TX_ARM_DELAY_MS        5000u // Minimum delay after CAN (re)initialisation
+#define CAN_TX_ARM_RX_FRAMES       300u  // New valid RX frames required before TX
 #define OTA_BOOT_VERIFY_DELAY_MS  10000u // Healthy runtime required before accepting a new OTA image
 #define OTA_BOOT_VERIFY_RETRY_MS   5000u // Retry a transient partition-validation failure
 
