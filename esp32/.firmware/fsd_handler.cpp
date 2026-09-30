@@ -151,6 +151,8 @@ void fsd_apply_hw_version(FSDState *state, TeslaHWVersion hw) {
 bool fsd_can_transmit(const FSDState *state) {
     if (!state->can_driver_available)        return false;
     if (!state->can_tx_armed)                return false;
+    if (state->hw_mode_auto &&
+        state->hw_version == TeslaHW_Unknown) return false;
     if (state->op_mode == OpMode_ListenOnly) return false;
     if (state->tesla_ota_in_progress)        return false;
     if (state->device_ota_in_progress)       return false;

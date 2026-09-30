@@ -1002,7 +1002,10 @@ static void can_task(void *param) {
         // live-traffic requirements have been met. Other TX gates remain in force.
         uint32_t arm_check_ms = millis();
         state_enter();
+        bool hardware_ready = !g_state.hw_mode_auto ||
+            g_state.hw_version != TeslaHW_Unknown;
         bool arm_now = !g_state.can_tx_armed &&
+            hardware_ready &&
             !g_state.tesla_ota_in_progress &&
             !g_state.device_ota_in_progress &&
             (arm_check_ms - g_can_tx_arm_start_ms) >= CAN_TX_ARM_DELAY_MS &&
