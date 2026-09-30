@@ -333,7 +333,6 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <div class="sb"><div class="sv" id="txInvalid">0</div><div class="sl">TX Invalid</div></div>
     <div class="sb"><div class="sv" id="rxQueue">--</div><div class="sl">RX Queue / Peak</div></div>
     <div class="sb"><div class="sv" id="txQueue">--</div><div class="sl">TX Queue / Peak</div></div>
-    <div class="sb"><div class="sv" id="twaiRestarts">0</div><div class="sl">TWAI Restarts</div></div>
     <div class="sb"><div class="sv" id="twaiState">--</div><div class="sl">TWAI State</div></div>
     <div class="sb"><div class="sv" id="fps">0.0</div><div class="sl">Frames/s</div></div>
   </div>
@@ -817,7 +816,6 @@ function upd(d){
   if(document.getElementById('txInvalid')) document.getElementById('txInvalid').textContent=(d.tx_invalid||0).toLocaleString();
   if(document.getElementById('rxQueue')) document.getElementById('rxQueue').textContent=d.queue_stats_valid?((d.rx_pending||0)+' / '+(d.rx_queue_peak||0)):'N/A';
   if(document.getElementById('txQueue')) document.getElementById('txQueue').textContent=d.queue_stats_valid?((d.tx_pending||0)+' / '+(d.tx_queue_peak||0)):'N/A';
-  if(document.getElementById('twaiRestarts')) document.getElementById('twaiRestarts').textContent=(d.twai_restarts||0).toLocaleString();
   if(document.getElementById('twaiState')) document.getElementById('twaiState').textContent=TWAI[d.twai_state]||'Unknown';
   if(document.getElementById('fps')) document.getElementById('fps').textContent=(d.fps||0.0).toFixed(1);
 
@@ -1294,7 +1292,6 @@ static size_t build_json(char *out, size_t out_len,
     JAPP("\"tx_pending\":%lu,", (unsigned long)state.tx_queue_pending);
     JAPP("\"rx_queue_peak\":%lu,", (unsigned long)state.rx_queue_peak);
     JAPP("\"tx_queue_peak\":%lu,", (unsigned long)state.tx_queue_peak);
-    JAPP("\"twai_restarts\":%lu,", (unsigned long)state.twai_restart_count);
     JAPP("\"twai_state\":%u,", (unsigned)state.twai_state);
     JAPP("\"crc_errors\":%lu,", (unsigned long)(state.rx_missed_count + state.bus_error_count + state.rx_overrun_count));
     JAPP("\"fps\":%s,", fps_s);
