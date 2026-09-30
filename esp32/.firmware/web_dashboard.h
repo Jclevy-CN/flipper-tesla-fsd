@@ -4,6 +4,8 @@
 #include <freertos/queue.h>
 #include "fsd_handler.h"
 
+using RestartPrepareCallback = void (*)();
+
 /**
  * web_dashboard.h — HTTP + WebSocket dashboard
  *
@@ -22,9 +24,11 @@
  * @param state      Pointer to the shared FSDState (read + written by command handler)
  * @param can_command_queue Queue used to request mode changes from the CAN task
  * @param state_mux  Shared mux guarding FSDState across Web/Core 0 and CAN/Core 1
+ * @param prepare_restart Callback that quiesces CAN before ESP.restart()
  */
 void web_dashboard_init(FSDState *state, QueueHandle_t can_command_queue,
-                        portMUX_TYPE *state_mux);
+                        portMUX_TYPE *state_mux,
+                        RestartPrepareCallback prepare_restart);
 
 /** True after the Web task has been created and completed at least one loop. */
 bool web_dashboard_healthy();

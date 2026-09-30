@@ -162,13 +162,19 @@ TeslaHWVersion fsd_detect_hw_version(const CanFrame *frame) {
 
 void fsd_handle_gtw_car_state(FSDState *state, const CanFrame *frame) {
     if (frame->dlc < 7) return;
-    // GTW_updateInProgress: bits 1:0 of byte 6.
-    // Filter transient / incompatible values to avoid false positives.
-    uint8_t raw = frame->data[6] & 0x03u;
+    // GTW_updateInProgress: bits 1:0 of byte 6, with raw 2 = installing.
+    // On current vehicles the complete byte may instead be a rolling counter.
+    // Require the full byte to repeat so a counter cannot assert OTA merely
+    // because its low two bits alias the installing value after dropped frames.
+    uint8_t byte6 = frame->data[6];
+    uint8_t raw = byte6 & 0x03u;
     state->ota_raw_state = raw;
 
-    bool in_progress = (raw == OTA_IN_PROGRESS_RAW_VALUE);
-    if (in_progress) {
+    bool stable_installing =
+        raw == OTA_IN_PROGRESS_RAW_VALUE &&
+        state->ota_last_valid &&
+        byte6 == state->ota_last_byte6;
+    if (stable_installing) {
         if (state->ota_assert_count < 255u) state->ota_assert_count++;
         state->ota_clear_count = 0;
         if (state->ota_assert_count >= OTA_ASSERT_FRAMES)
@@ -179,6 +185,9 @@ void fsd_handle_gtw_car_state(FSDState *state, const CanFrame *frame) {
         if (state->ota_clear_count >= OTA_CLEAR_FRAMES)
             state->tesla_ota_in_progress = false;
     }
+
+    state->ota_last_byte6 = byte6;
+    state->ota_last_valid = true;
 }
 
 // ── Follow distance → speed profile (DAS_followDistance 0x3F8) ───────────────

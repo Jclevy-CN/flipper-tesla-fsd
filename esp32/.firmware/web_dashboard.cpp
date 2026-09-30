@@ -31,6 +31,7 @@
 static FSDState     *g_state     = nullptr;   // shared with main
 static portMUX_TYPE *g_state_mux = nullptr;   // owned by main
 static QueueHandle_t g_can_command_queue = nullptr;
+static RestartPrepareCallback g_prepare_restart = nullptr;
 static uint32_t      g_can_request_id = 0;
 
 static WebServer        g_http(80);
@@ -1339,7 +1340,12 @@ static void ws_event(uint8_t num, WStype_t type,
             state_exit();
 
             if (!already_pending) {
-                CanCommand command = {CanCommandType::SetMode, requested_mode, request_id};
+                CanCommand command = {
+                    CanCommandType::SetMode,
+                    requested_mode,
+                    request_id,
+                    nullptr
+                };
                 if (xQueueSend(g_can_command_queue, &command, 0) != pdTRUE) {
                     state_enter();
                     if (g_state->can_mode_switch_request_id == request_id) {
@@ -1707,6 +1713,7 @@ static void ws_event(uint8_t num, WStype_t type,
             Serial.printf("[Web] WiFi config: SSID=\"%s\" PASS=*** HIDDEN=%d\n",
                 saved.wifi_ssid, saved.wifi_hidden);
             prefs_save(&saved);
+            if (g_prepare_restart != nullptr) g_prepare_restart();
             delay(500);
             ESP.restart();
         }
@@ -1748,6 +1755,7 @@ static void handle_sdformat() {
 
 static void handle_restart() {
     g_http.send(200, "text/plain", "OK");
+    if (g_prepare_restart != nullptr) g_prepare_restart();
     delay(500);
     ESP.restart();
 }
@@ -1847,16 +1855,19 @@ static void handle_ota_done() {
     Serial.println("[OTA] Firmware update successful!");
     Serial.println("[OTA] Rebooting in 2 seconds...");
 
+    if (g_prepare_restart != nullptr) g_prepare_restart();
     delay(2000);
     ESP.restart();
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 void web_dashboard_init(FSDState *state, QueueHandle_t can_command_queue,
-                        portMUX_TYPE *state_mux) {
+                        portMUX_TYPE *state_mux,
+                        RestartPrepareCallback prepare_restart) {
     g_state       = state;
     g_state_mux   = state_mux;
     g_can_command_queue = can_command_queue;
+    g_prepare_restart = prepare_restart;
     g_start_ms    = millis();
     g_last_fps_ms = millis();
     FSDState initial_state;

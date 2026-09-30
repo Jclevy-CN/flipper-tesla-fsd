@@ -67,6 +67,9 @@ public:
     /** Discard frames already waiting in the controller's transmit queue. */
     virtual bool clearPendingTransmit() = 0;
 
+    /** Stop the controller and leave it unable to TX or ACK before reset. */
+    virtual void shutdown() = 0;
+
     virtual ~CanDriver() = default;
 };
 

@@ -55,6 +55,8 @@ struct FSDState {
     bool           can_tx_armed;             // startup delay + live-RX threshold satisfied
     bool           tesla_ota_in_progress;   // pause TX during OTA
     uint8_t        ota_raw_state;           // raw GTW_updateInProgress bits [1:0]
+    uint8_t        ota_last_byte6;          // previous complete byte 6 (counter-vs-flag check)
+    bool           ota_last_valid;          // ota_last_byte6 has been initialised
     uint8_t        ota_assert_count;        // consecutive "in-progress" samples
     uint8_t        ota_clear_count;         // consecutive "not in-progress" samples
     uint32_t       rx_missed_count;         // TWAI RX queue missed frames

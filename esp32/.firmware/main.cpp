@@ -53,6 +53,7 @@ static void state_enter();
 static void state_exit();
 static void reset_can_tx_arming();
 static void clear_pending_transmit(const char *reason);
+static void prepare_can_for_restart();
 
 #if defined(BOARD_WAVESHARE_S3)
 static bool g_chip_temp_ready = false;
@@ -152,6 +153,40 @@ static void clear_pending_transmit(const char *reason) {
     bool ok = g_can != nullptr && g_can->clearPendingTransmit();
     Serial.printf("[CAN] Pending TX clear %s (%s)\n", ok ? "OK" : "FAILED", reason);
     can_dump_log("TXQ clear %s (%s)", ok ? "OK" : "FAILED", reason);
+}
+
+static void prepare_can_for_restart() {
+    // Close the software gate before touching the task or peripheral, so a TX
+    // already approaching the driver is rejected on its final gate check.
+    state_enter();
+    g_state.can_tx_armed = false;
+    g_state.can_driver_available = false;
+    state_exit();
+
+    // Web-triggered restarts run on Core 0 while CAN runs on Core 1. Ask the CAN
+    // task to shut down its own driver, avoiding a cross-core teardown while it
+    // is inside receive(), send(), or a controller health operation. Factory
+    // reset calls this from the CAN task and can shut down directly.
+    TaskHandle_t current = xTaskGetCurrentTaskHandle();
+    if (g_can_task_handle != nullptr && current != g_can_task_handle &&
+        g_can_command_queue != nullptr) {
+        CanCommand command = {
+            CanCommandType::ShutdownForRestart,
+            OpMode_ListenOnly,
+            0,
+            current
+        };
+        if (xQueueSendToFront(g_can_command_queue, &command, pdMS_TO_TICKS(500)) == pdTRUE &&
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1500)) > 0) {
+            Serial.println("[CAN] Controller stopped - bus released for restart");
+            return;
+        }
+        Serial.println("[CAN] WARNING: orderly shutdown timed out; forcing shutdown");
+        vTaskSuspend(g_can_task_handle);
+    }
+
+    if (g_can != nullptr) g_can->shutdown();
+    Serial.println("[CAN] Controller stopped - bus released for restart");
 }
 
 static const char *reset_reason_name(esp_reset_reason_t reason) {
@@ -279,6 +314,7 @@ static void button_tick() {
         if (g_factory_reset_armed) {
             Serial.println("[BTN] Factory reset confirmed — clearing NVS");
             prefs_clear();
+            prepare_can_for_restart();
             delay(200);
             ESP.restart();
         }
@@ -685,6 +721,12 @@ static void can_task(void *param) {
         while (xQueueReceive(g_can_command_queue, &command, 0) == pdTRUE) {
             if (command.type == CanCommandType::SetMode) {
                 apply_can_mode(command.requested_mode, command.request_id, "Web");
+            } else if (command.type == CanCommandType::ShutdownForRestart) {
+                if (g_can != nullptr) g_can->shutdown();
+                if (command.reply_task != nullptr) xTaskNotifyGive(command.reply_task);
+                // The requesting task will restart the chip. Do not touch the
+                // stopped controller again in the meantime.
+                vTaskSuspend(nullptr);
             }
         }
 
@@ -1036,7 +1078,8 @@ void setup() {
     // ── WiFi AP + Web dashboard (non-fatal if WiFi fails) ─────────────────────
     if (wifi_ap_init(&g_state)) {
         g_web_runtime_expected = true;
-        web_dashboard_init(&g_state, g_can_command_queue, &g_state_mux);
+        web_dashboard_init(&g_state, g_can_command_queue, &g_state_mux,
+                           prepare_can_for_restart);
     }
 
     // ── Create CAN task pinned to Core 1 ──────────────────────────────────────

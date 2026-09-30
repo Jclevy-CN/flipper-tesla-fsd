@@ -70,10 +70,10 @@
 #define OTA_BOOT_VERIFY_RETRY_MS   5000u // Retry a transient partition-validation failure
 
 // OTA detection hardening on GTW_carState (0x318)
-// Some firmware versions keep non-zero states when no update is actively running.
-// We only treat one specific raw value as "update in progress" and require
-// consecutive-frame confirmation to avoid false positives.
-#define OTA_IN_PROGRESS_RAW_VALUE  1u
+// Current vehicles may use byte 6 as a rolling counter.  Only raw value 2 is
+// "installing", and it must remain byte-for-byte stable across samples before
+// it can assert OTA; matching the low two bits alone can alias a counter.
+#define OTA_IN_PROGRESS_RAW_VALUE  2u
 #define OTA_ASSERT_FRAMES          3u
 #define OTA_CLEAR_FRAMES           6u
 

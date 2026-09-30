@@ -160,6 +160,15 @@ public:
     bool clearPendingTransmit() override {
         return installed_ && twai_clear_transmit_queue() == ESP_OK;
     }
+
+    void shutdown() override {
+        stop_and_uninstall();
+        // Hand the TX pad back from TWAI without a dominant glitch and keep it
+        // recessive until the ESP32 reset completes.
+        digitalWrite(PIN_CAN_TX, HIGH);
+        pinMode(PIN_CAN_TX, OUTPUT);
+        digitalWrite(PIN_CAN_TX, HIGH);
+    }
 };
 
 CanDriver *can_driver_create() {
@@ -271,6 +280,14 @@ public:
         // autowp-mcp2515 does not expose the MCP2515 ABAT control. A reset and
         // reinitialisation guarantees that all TXREQ slots are discarded.
         return begin(listen_only_);
+    }
+
+    void shutdown() override {
+        if (!ready_) return;
+        // Configuration mode neither transmits nor ACKs. RESET is the fallback
+        // because it also leaves MCP2515 in configuration mode.
+        if (mcp_.setConfigMode() != MCP2515::ERROR_OK) mcp_.reset();
+        ready_ = false;
     }
 };
 
