@@ -147,10 +147,63 @@ static bool frame_looks_like_hw3_das_status(const CanFrame &frame) {
     return ap_state <= 3u && hands_on <= 8u;
 }
 
+// Small, coherent view used by the RX dispatcher. Keep the full FSDState out
+// of the per-frame hot path while preserving the existing critical section and
+// the single-point TX safety decision.
+struct RxDispatchSnapshot {
+    TeslaHWVersion hw_version;
+    bool hw_mode_auto;
+    bool suppress_speed_chime;
+    bool tx_allowed;
+};
+
+static RxDispatchSnapshot rx_dispatch_snapshot() {
+    RxDispatchSnapshot s;
+    state_enter();
+    s.hw_version = g_state.hw_version;
+    s.hw_mode_auto = g_state.hw_mode_auto;
+    s.suppress_speed_chime = g_state.suppress_speed_chime;
+    s.tx_allowed = fsd_can_transmit(&g_state);
+    state_exit();
+    return s;
+}
+
+// Small view needed on every CAN-task iteration. Detailed BMS/status output
+// takes a full snapshot only when its timer is actually due.
+struct LoopRuntimeSnapshot {
+    bool precondition;
+    bool tx_allowed;
+    bool bms_output;
+    bool bms_seen;
+    OpMode op_mode;
+    bool tesla_ota_in_progress;
+    bool autopark_tx_block;
+    uint32_t rx_count;
+    uint32_t sleep_idle_ms;
+};
+
+static LoopRuntimeSnapshot loop_runtime_snapshot() {
+    LoopRuntimeSnapshot s;
+    state_enter();
+    s.precondition = g_state.precondition;
+    s.tx_allowed = fsd_can_transmit(&g_state);
+    s.bms_output = g_state.bms_output;
+    s.bms_seen = g_state.bms_seen;
+    s.op_mode = g_state.op_mode;
+    s.tesla_ota_in_progress = g_state.tesla_ota_in_progress;
+    s.autopark_tx_block = g_state.autopark_tx_block;
+    s.rx_count = g_state.rx_count;
+    s.sleep_idle_ms = g_state.sleep_idle_ms;
+    state_exit();
+    return s;
+}
+
 static bool driver_transmit_gate(const CanFrame &frame) {
     (void)frame;
-    FSDState state = state_snapshot();
-    return fsd_can_transmit(&state);
+    state_enter();
+    bool allowed = fsd_can_transmit(&g_state);
+    state_exit();
+    return allowed;
 }
 
 static void reset_can_tx_arming() {
@@ -345,24 +398,28 @@ static void button_tick() {
 }
 
 static bool send_can_frame(const CanFrame& frame) {
-    if (g_can != nullptr && g_can->send(frame)) {
-        state_enter();
+    CanSendResult result = g_can != nullptr
+        ? g_can->send(frame)
+        : CanSendResult::Failed;
+    state_enter();
+    if (result == CanSendResult::Sent) {
         g_state.frames_sent++;
-        state_exit();
-        return true;
+    } else if (result == CanSendResult::Gated) {
+        g_state.tx_gated_count++;
     } else {
-        state_enter();
         g_state.tx_fail_count++;
-        state_exit();
-        return false;
     }
+    state_exit();
+    return result == CanSendResult::Sent;
 }
 
 static bool send_can_frame_if_allowed(const CanFrame& frame) {
-    FSDState state = state_snapshot();
-    if (!fsd_can_transmit(&state)) {
+    state_enter();
+    bool allowed = fsd_can_transmit(&g_state);
+    state_exit();
+    if (!allowed) {
         state_enter();
-        g_state.tx_fail_count++;
+        g_state.tx_gated_count++;
         state_exit();
         return false;
     }
@@ -475,8 +532,7 @@ static void log_hw4_mux2_debug(const CanFrame& in,
 #endif
 
 // ── LED refresh ───────────────────────────────────────────────────────────────
-static void update_led() {
-    FSDState state = state_snapshot();
+static void update_led(const LoopRuntimeSnapshot &state) {
     if (g_factory_reset_armed) {
         led_set(LED_WHITE);
         return;
@@ -534,7 +590,7 @@ static void process_frame(const CanFrame &frame) {
     // ── HW auto-detect (passive, runs in both modes) ─────────────────────────
     if (saw_gtw_car_config) {
         TeslaHWVersion hw = fsd_detect_hw_version(&frame);
-        FSDState state = state_snapshot();
+        RxDispatchSnapshot state = rx_dispatch_snapshot();
         if (hw != TeslaHW_Unknown && state.hw_version == TeslaHW_Unknown && state.hw_mode_auto)
             apply_detected_hw(hw, "0x398");
         return;
@@ -573,10 +629,10 @@ static void process_frame(const CanFrame &frame) {
 
     // Auto-upgrade Legacy→HW3: Palladium S/X with HW3 reports das_hw=0
     // (→Legacy) but actually uses 0x3FD. True Legacy never broadcasts 0x3FD.
-    FSDState state = state_snapshot();
+    RxDispatchSnapshot state = rx_dispatch_snapshot();
     if (state.hw_mode_auto && state.hw_version == TeslaHW_Legacy && saw_ap_control) {
         apply_detected_hw(TeslaHW_HW3, "upgrade:Legacy→HW3(0x3FD seen)");
-        state = state_snapshot();
+        state = rx_dispatch_snapshot();
     }
 
     // Fallback HW detection when 0x398 is unavailable. A full HW4 0x39B is
@@ -600,12 +656,15 @@ static void process_frame(const CanFrame &frame) {
             hw_fallback_399_count++;
             if (hw_fallback_399_count >= 2u)
                 apply_detected_hw(TeslaHW_HW3, "fallback:0x399(DAS status)");
+        } else if (frame.id == CAN_ID_DAS_STATUS_HW3) {
+            // An implausible 0x399 breaks the confirmation sequence.
+            hw_fallback_399_count = 0;
         } else if (saw_ap_control) {
             hw_fallback_3fd_count++;
             if (hw_fallback_3fd_count >= 10u)
                 apply_detected_hw(TeslaHW_HW3, "fallback:0x3FD(confirmed)");
         }
-        state = state_snapshot();
+        state = rx_dispatch_snapshot();
     }
 
     // DAS status is read-only but layout differs by hardware generation.
@@ -638,8 +697,8 @@ static void process_frame(const CanFrame &frame) {
     }
 
     // ── Beyond here only run when TX is allowed ───────────────────────────────
-    state = state_snapshot();
-    bool tx = fsd_can_transmit(&state);
+    state = rx_dispatch_snapshot();
+    bool tx = state.tx_allowed;
 
     // NAG killer — do not build the echo or mutate NAG accounting while TX is
     // blocked by Listen-Only mode, OTA protection, or another transmit gate.
@@ -719,7 +778,6 @@ static void process_frame(const CanFrame &frame) {
     // HW3/HW4 autopilot control (0x3FD) — main FSD activation frame
     if (saw_ap_control) {
         CanFrame f = frame;
-        state = state_snapshot();
         bool is_hw4_mux2 = (state.hw_version == TeslaHW_HW4 &&
                             frame.dlc >= 8 &&
                             ((frame.data[0] & 0x07u) == 2u));
@@ -742,10 +800,9 @@ static void process_frame(const CanFrame &frame) {
 
 #if defined(BOARD_LILYGO)
 // ── Deep-sleep watchdog (Lilygo only) ────────────────────────────────────────
-static void sleep_tick(uint32_t now) {
+static void sleep_tick(uint32_t now, const LoopRuntimeSnapshot &state) {
     if (now < g_last_can_rx_ms) return;
     uint32_t idle_ms = now - g_last_can_rx_ms;
-    FSDState state = state_snapshot();
 
     if (idle_ms >= state.sleep_idle_ms) {
         Serial.printf("[SLEEP] Entering deep sleep after %lu ms CAN silence\n",
@@ -816,10 +873,13 @@ static void can_task(void *param) {
             last_err_ms = now;
         }
 
-        // Drain all available CAN frames in one shot
+        // Drain a bounded RX batch. Under sustained load this guarantees the
+        // mode-command, health, arming and heartbeat work below gets a turn.
         CanFrame frame;
-        while (g_can->receive(frame)) {
+        uint8_t frames_processed = 0;
+        while (frames_processed < CAN_RX_BATCH_MAX && g_can->receive(frame)) {
             process_frame(frame);
+            frames_processed++;
         }
 
         // Recover a bus-off TWAI controller so RX/TX resume without a manual
@@ -901,9 +961,20 @@ static void can_task(void *param) {
         }
 
         // ── Precondition frame injection ──────────────────────────────────────
+        // Keep the 1 ms path small. A full state copy is loaded lazily below
+        // only when BMS or status output is actually due.
+        const LoopRuntimeSnapshot loop_state = loop_runtime_snapshot();
+        FSDState detail_state;
+        bool detail_state_loaded = false;
+        auto load_detail_state = [&]() -> const FSDState& {
+            if (!detail_state_loaded) {
+                detail_state = state_snapshot();
+                detail_state_loaded = true;
+            }
+            return detail_state;
+        };
         static uint32_t last_precond_ms = 0;
-        FSDState state = state_snapshot();
-        if (state.precondition && fsd_can_transmit(&state) &&
+        if (loop_state.precondition && loop_state.tx_allowed &&
             (now - last_precond_ms) >= PRECOND_INTERVAL_MS) {
             CanFrame pf;
             fsd_build_precondition_frame(&pf);
@@ -913,9 +984,9 @@ static void can_task(void *param) {
 
         // ── BMS serial output ─────────────────────────────────────────────────
         static uint32_t last_bms_ms = 0;
-        state = state_snapshot();
-        if (state.bms_output && state.bms_seen &&
+        if (loop_state.bms_output && loop_state.bms_seen &&
             (now - last_bms_ms) >= BMS_PRINT_MS) {
+            const FSDState &state = load_detail_state();
             float kw = state.pack_voltage_v * state.pack_current_a / 1000.0f;
             Serial.printf("[BMS] %.1fV  %.1fA  %.2fkW  SoC:%.1f%%  Temp:%d~%d°C\n",
                 state.pack_voltage_v,
@@ -929,9 +1000,9 @@ static void can_task(void *param) {
 
         // ── Active-mode status line ───────────────────────────────────────────
         static uint32_t last_status_ms = 0;
-        state = state_snapshot();
-        if (state.op_mode == OpMode_Active &&
+        if (loop_state.op_mode == OpMode_Active &&
             (now - last_status_ms) >= STATUS_PRINT_MS) {
+            const FSDState &state = load_detail_state();
             const char *hw_str =
                 (state.hw_version == TeslaHW_HW4)    ? "HW4"    :
                 (state.hw_version == TeslaHW_HW3)    ? "HW3"    :
@@ -954,8 +1025,7 @@ static void can_task(void *param) {
 
         // ── Wiring sanity warning ─────────────────────────────────────────────
         static uint32_t last_warn_ms = 0;
-        state = state_snapshot();
-        if (state.rx_count == 0 && now > WIRING_WARN_MS &&
+        if (loop_state.rx_count == 0 && now > WIRING_WARN_MS &&
             (now - last_warn_ms) >= 2000u) {
             Serial.println("[WARN] No CAN traffic after 5 s — check wiring");
             Serial.println("[WARN] Verify CAN-H on OBD pin 6, CAN-L on pin 14");
@@ -965,10 +1035,10 @@ static void can_task(void *param) {
         can_dump_tick(now);
 
 #if defined(BOARD_LILYGO)
-        sleep_tick(now);
+        sleep_tick(now, loop_state);
 #endif
 
-        update_led();
+        update_led(loop_state);
 
         vTaskDelay(pdMS_TO_TICKS(1));
     }

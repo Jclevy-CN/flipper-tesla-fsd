@@ -323,6 +323,7 @@ input:checked+.sl2:before{transform:translateX(20px);background:#fff}
     <div class="sb"><div class="sv" id="txCnt">0</div><div class="sl">Modified</div></div>
     <div class="sb"><div class="sv" id="txSent">0</div><div class="sl">TX Sent</div></div>
     <div class="sb"><div class="sv" id="txFail">0</div><div class="sl">TX Failed</div></div>
+    <div class="sb"><div class="sv" id="txGated">0</div><div class="sl">TX Gated</div></div>
     <div class="sb"><div class="sv" id="rxMissed">0</div><div class="sl">RX Missed</div></div>
     <div class="sb"><div class="sv" id="busErr">0</div><div class="sl">Bus Errors</div></div>
     <div class="sb"><div class="sv" id="rxOverrun">0</div><div class="sl">RX Overrun</div></div>
@@ -798,6 +799,7 @@ function upd(d){
   if(document.getElementById('txCnt')) document.getElementById('txCnt').textContent=(d.tx_count||0).toLocaleString();
   if(document.getElementById('txSent')) document.getElementById('txSent').textContent=(d.tx_sent||0).toLocaleString();
   if(document.getElementById('txFail')) document.getElementById('txFail').textContent=(d.tx_failed||0).toLocaleString();
+  if(document.getElementById('txGated')) document.getElementById('txGated').textContent=(d.tx_gated||0).toLocaleString();
   if(document.getElementById('rxMissed')) document.getElementById('rxMissed').textContent=(d.rx_missed||0).toLocaleString();
   if(document.getElementById('busErr')) document.getElementById('busErr').textContent=(d.bus_errors||0).toLocaleString();
   if(document.getElementById('rxOverrun')) document.getElementById('rxOverrun').textContent=(d.rx_overrun||0).toLocaleString();
@@ -1263,6 +1265,7 @@ static size_t build_json(char *out, size_t out_len) {
     JAPP("\"tx_count\":%lu,", (unsigned long)state.frames_modified);
     JAPP("\"tx_sent\":%lu,", (unsigned long)state.frames_sent);
     JAPP("\"tx_failed\":%lu,", (unsigned long)state.tx_fail_count);
+    JAPP("\"tx_gated\":%lu,", (unsigned long)state.tx_gated_count);
     JAPP("\"debug_log\":\"");
     json_append_escaped(p, end, state.web_debug_log);
     JAPP("\",");

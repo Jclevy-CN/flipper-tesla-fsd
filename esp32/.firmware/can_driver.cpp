@@ -63,19 +63,22 @@ public:
         return install_and_start(listen_only);
     }
 
-    bool send(const CanFrame &frame) override {
+    CanSendResult send(const CanFrame &frame) override {
         if (frame.id > 0x7FFu || frame.dlc > 8u) {
             tx_invalid_++;
-            return false;
+            return CanSendResult::Failed;
         }
-        if (!transmitAllowed(frame) || !installed_ || listen_only_) return false;
+        if (!transmitAllowed(frame)) return CanSendResult::Gated;
+        if (!installed_ || listen_only_) return CanSendResult::Failed;
         twai_message_t msg;
         memset(&msg, 0, sizeof(msg));
         msg.identifier       = frame.id;
         msg.data_length_code = frame.dlc;
         memcpy(msg.data, frame.data, frame.dlc);
         // 5 ms TX timeout — short enough to not stall the main loop
-        return twai_transmit(&msg, pdMS_TO_TICKS(5)) == ESP_OK;
+        return twai_transmit(&msg, pdMS_TO_TICKS(5)) == ESP_OK
+            ? CanSendResult::Sent
+            : CanSendResult::Failed;
     }
 
     bool receive(CanFrame &frame) override {
@@ -210,21 +213,22 @@ public:
         return true;
     }
 
-    bool send(const CanFrame &frame) override {
+    CanSendResult send(const CanFrame &frame) override {
         if (frame.id > CAN_SFF_MASK || frame.dlc > 8u) {
             tx_invalid_++;
-            return false;
+            return CanSendResult::Failed;
         }
-        if (!transmitAllowed(frame) || !ready_ || listen_only_) return false;
+        if (!transmitAllowed(frame)) return CanSendResult::Gated;
+        if (!ready_ || listen_only_) return CanSendResult::Failed;
         struct can_frame f = {};
         f.can_id  = frame.id;
         f.can_dlc = frame.dlc;
         memcpy(f.data, frame.data, frame.dlc);
         if (mcp_.sendMessage(&f) != MCP2515::ERROR_OK) {
             err_count_++;
-            return false;
+            return CanSendResult::Failed;
         }
-        return true;
+        return CanSendResult::Sent;
     }
 
     bool receive(CanFrame &frame) override {

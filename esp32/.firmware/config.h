@@ -68,6 +68,7 @@
 #define TWAI_RECOVER_MAX_ATTEMPTS 3u   // Avoid endless restart loops on real wiring faults
 #define CAN_TX_ARM_DELAY_MS        5000u // Minimum delay after CAN (re)initialisation
 #define CAN_TX_ARM_RX_FRAMES       300u  // New valid RX frames required before TX
+#define CAN_RX_BATCH_MAX             64u // Bound one CAN-task RX batch so maintenance cannot starve
 #define OTA_BOOT_VERIFY_DELAY_MS  10000u // Healthy runtime required before accepting a new OTA image
 #define OTA_BOOT_VERIFY_RETRY_MS   5000u // Retry a transient partition-validation failure
 #define OTA_HEARTBEAT_MAX_AGE_MS   1000u // CAN/Web tasks must have run this recently

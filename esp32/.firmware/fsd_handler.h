@@ -36,7 +36,8 @@ struct FSDState {
 
     uint32_t       frames_modified; // frames modified by logic before TX gate
     uint32_t       frames_sent;     // frames successfully sent by CAN driver
-    uint32_t       tx_fail_count;   // send attempts rejected/failed by CAN driver
+    uint32_t       tx_fail_count;   // invalid/unavailable/hardware TX failures
+    uint32_t       tx_gated_count;  // intentional safety-gate TX rejections
     char           web_debug_log[224]; // latest debug line for Web UI log window
 
     // ── Feature flags (runtime-toggleable) ───────────────────────────────────

@@ -24,6 +24,12 @@ enum class CanModeResult : uint8_t {
 
 typedef bool (*CanTransmitGate)(const CanFrame &frame);
 
+enum class CanSendResult : uint8_t {
+    Sent,
+    Gated,
+    Failed,
+};
+
 // ── Abstract CAN driver ───────────────────────────────────────────────────────
 // Implemented by TwaiDriver (CAN_DRIVER_TWAI) and Mcp2515Driver (CAN_DRIVER_MCP2515).
 // Compile-time selection via platformio.ini build_flags.
@@ -44,8 +50,8 @@ public:
      *  @param listen_only  If true, enter hardware listen-only mode (no ACK, no TX). */
     virtual bool begin(bool listen_only) = 0;
 
-    /** Send one CAN frame.  Returns false when TX is not allowed (listen-only, bus-off, etc.). */
-    virtual bool send(const CanFrame &frame) = 0;
+    /** Send one CAN frame, distinguishing an intentional safety gate from a TX failure. */
+    virtual CanSendResult send(const CanFrame &frame) = 0;
 
     /** Non-blocking receive.  Fills frame and returns true if a frame was available. */
     virtual bool receive(CanFrame &frame) = 0;
