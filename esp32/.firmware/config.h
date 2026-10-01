@@ -64,8 +64,6 @@
 #define FACTORY_RESET_HOLD_MS   5000u   // Hold duration to arm factory reset
 #define FACTORY_RESET_WINDOW_MS 20000u  // Clean-boot window during which reset is possible
 #define STATUS_PRINT_MS       5000u   // Periodic status line when Active
-#define TWAI_RECOVER_AFTER_MS 10000u   // Restart TWAI once CAN stays silent after boot
-#define TWAI_RECOVER_MAX_ATTEMPTS 3u   // Avoid endless restart loops on real wiring faults
 #define CAN_TX_ARM_DELAY_MS        5000u // Minimum delay after CAN (re)initialisation
 #define CAN_TX_ARM_RX_FRAMES       300u  // New valid RX frames required before TX
 #define CAN_RX_BATCH_MAX             64u // Bound one CAN-task RX batch so maintenance cannot starve
